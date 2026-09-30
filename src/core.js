@@ -810,10 +810,134 @@ export function readSource(img, { read = 'auto', tileSize = 0, swap = false, pla
     if (split && swap) split = { terrain: split.background, background: split.terrain };
   }
   if (t < 2 || t % 2) throw new Error(`The tile size has to be an even number of pixels (got ${t}), because every tile is cut into quarters.`);
-  const { pieces, tiles } = extract(img, t, mode, { layout, split, fillMap: split ? filledMap(img, split) : img });
+  const { pieces, tiles, placements } = extract(img, t, mode, { layout, split, fillMap: split ? filledMap(img, split) : img });
   takePlain(img, t, pieces, plain);
   completePieces(pieces);
-  return { read: mode, tileSize: t, pieces, tiles, cols: Math.floor(img.width / t), rows: Math.floor(img.height / t), split };
+  return { read: mode, tileSize: t, pieces, tiles, placements, cols: Math.floor(img.width / t), rows: Math.floor(img.height / t), split };
+}
+
+// ---------------------------------------------------------------------------
+// Animation frames
+
+/** The frame layout of a still image: one frame, the whole image. */
+export function singleFrame(img) {
+  return { cols: 1, rows: 1, spacing: 0, width: img.width, height: img.height };
+}
+
+/** The size of one frame when `count` frames `spacing` apart fill `length`
+ *  pixels, or 0 if they don't fit evenly. */
+function frameLength(length, count, spacing) {
+  const each = (length - (count - 1) * spacing) / count;
+  return Number.isInteger(each) && each > 0 ? each : 0;
+}
+
+/** True if every frame along one axis matches the first: see-through in the
+ *  same places, and mostly the very same pixels (an animation changes only
+ *  some of them). Gaps between frames must be blank or one flat colour. */
+function framesMatch(img, count, size, spacing, axis) {
+  const w = axis === 'x' ? size : img.width, h = axis === 'y' ? size : img.height;
+  const at = (k, x, y) => ((axis === 'y' ? y + k * (size + spacing) : y) * img.width + (axis === 'x' ? x + k * (size + spacing) : x)) * 4;
+  const d = img.data;
+  for (let k = 1; k < count; k++) {
+    let sameAlpha = 0, same = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = at(0, x, y), j = at(k, x, y);
+        if ((d[i + 3] >= 128) === (d[j + 3] >= 128)) sameAlpha++;
+        if (d[i] === d[j] && d[i + 1] === d[j + 1] && d[i + 2] === d[j + 2] && d[i + 3] === d[j + 3]) same++;
+      }
+    }
+    if (sameAlpha < 0.99 * w * h || same < 0.9 * w * h) return false;
+  }
+  if (!spacing) return true;
+  // Each gap is a strip after a frame; they must all be one colour.
+  const first = at(0, axis === 'x' ? size : 0, axis === 'y' ? size : 0);
+  for (let k = 0; k < count - 1; k++) {
+    for (let g = 0; g < spacing; g++) {
+      const along = k * (size + spacing) + size + g;
+      const across = axis === 'x' ? img.height : img.width;
+      for (let c = 0; c < across; c++) {
+        const i = (axis === 'x' ? c * img.width + along : along * img.width + c) * 4;
+        if (!(d[i + 3] < 128 && d[first + 3] < 128) && !(d[i] === d[first] && d[i + 1] === d[first + 1] && d[i + 2] === d[first + 2] && d[i + 3] === d[first + 3])) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** The most frames (smallest frame) along one axis that all match the first,
+ *  as { count, size, spacing }; count 1 if none do. */
+function framesAlong(img, axis) {
+  const length = axis === 'x' ? img.width : img.height;
+  for (let count = Math.floor(length / 8); count >= 2; count--) {
+    for (let spacing = 0; spacing <= 16; spacing++) {
+      const size = frameLength(length, count, spacing);
+      if (size >= 8 && framesMatch(img, count, size, spacing, axis)) return { count, size, spacing };
+    }
+  }
+  return { count: 1, size: length, spacing: 0 };
+}
+
+/** Find animation frames: copies of one sheet, side by side and/or stacked,
+ *  each a little different. Returns { cols, rows, spacing, width, height }:
+ *  frames across and down, the gap between them, and one frame's size. A
+ *  still image is one frame. */
+export function detectFrames(img) {
+  const across = framesAlong(img, 'x');
+  const firstColumn = { width: across.size, height: img.height, data: new Uint8ClampedArray(across.size * img.height * 4) };
+  blitRegion(img, 0, 0, across.size, img.height, firstColumn, 0, 0);
+  const down = framesAlong(firstColumn, 'y');
+  // One spacing for both directions: when they disagree, keep the side-by-side frames.
+  if (across.count > 1 && down.count > 1 && across.spacing !== down.spacing) {
+    return { cols: across.count, rows: 1, spacing: across.spacing, width: across.size, height: img.height };
+  }
+  return { cols: across.count, rows: down.count, spacing: across.count > 1 ? across.spacing : down.spacing, width: across.size, height: down.size };
+}
+
+/** A frame layout from frames across and down and the spacing between them,
+ *  or null if they don't divide the image evenly. */
+export function frameLayout(img, { cols = 1, rows = 1, spacing = 0 } = {}) {
+  const width = frameLength(img.width, cols, spacing), height = frameLength(img.height, rows, spacing);
+  return width && height ? { cols, rows, spacing, width, height } : null;
+}
+
+/** The frames of an image, in reading order: left to right, then top to bottom. */
+export function splitFrames(img, frames) {
+  const out = [];
+  for (let r = 0; r < frames.rows; r++) {
+    for (let c = 0; c < frames.cols; c++) {
+      const frame = createImage(frames.width, frames.height);
+      blitRegion(img, c * (frames.width + frames.spacing), r * (frames.height + frames.spacing), frames.width, frames.height, frame, 0, 0);
+      out.push(frame);
+    }
+  }
+  return out;
+}
+
+/** Read another frame of an animation the way `source` read the first: the
+ *  same tiles in the same places make the same pieces. Returns its pieces. */
+export function readFrame(img, source, { plain = null } = {}) {
+  const t = source.tileSize, h = t >> 1;
+  const pieces = new Pieces(h);
+  for (const { x0, y0, recipe } of source.placements) {
+    recipe.forEach((part, q) => {
+      pieces.offer(part.pos, part.kind, crop(img, x0 + (q & 1) * h, y0 + (q >> 1) * h, h, h), { x: x0 / t, y: y0 / t, q });
+    });
+  }
+  takePlain(img, t, pieces, plain);
+  completePieces(pieces);
+  return pieces;
+}
+
+/** A layout's sheet for every frame, side by side with no gap: Godot finds
+ *  a tile's later frames whole tiles to its right, so a gap in pixels can't
+ *  be described to it. */
+export function composeFrames(framePieces, layout, t) {
+  const sheets = framePieces.map((pieces) => composeSheet(pieces, layout, t));
+  const w = sheets[0].width;
+  const out = createImage(sheets.length * w, sheets[0].height);
+  sheets.forEach((sheet, k) => blitRegion(sheet, 0, 0, w, sheet.height, out, k * w, 0));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -865,10 +989,10 @@ export function readPicked(img, { family, tileSize, picks, plain = null }) {
   if (!t || t < 2 || t % 2) throw new Error(`The tile size has to be an even number of pixels (got ${t}), because every tile is cut into quarters.`);
   const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
   const slots = picks.filter((p) => p.x < cols && p.y < rows);
-  const { pieces, tiles } = extract(img, t, null, { layout: { family, slots } });
+  const { pieces, tiles, placements } = extract(img, t, null, { layout: { family, slots } });
   takePlain(img, t, pieces, plain);
   completePieces(pieces);
-  return { read: 'picked', family, tileSize: t, pieces, tiles, cols, rows, split: null };
+  return { read: 'picked', family, tileSize: t, pieces, tiles, placements, cols, rows, split: null };
 }
 
 /** Kinds of terrain piece that no source tile showed at any corner, so they
@@ -1231,12 +1355,23 @@ const CORNER_PEERING = ['top_left_corner', 'top_right_corner', 'bottom_left_corn
 
 /** A Godot 4 TileSet (.tres) for a sheet saved at `texturePath`, with one
  *  terrain whose peering bits are already painted on every tile.
+ *  For an animated sheet from composeFrames, `animation` is { frames,
+ *  seconds }: every tile plays its copies in the frames to its right, each
+ *  for `seconds`.
  *  Returns null for layouts that aren't autotile sheets. */
-export function godotTileSet(layout, { tileSize, texturePath, terrainName = 'Terrain', colour = [0.35, 0.7, 0.4] }) {
+export function godotTileSet(layout, { tileSize, texturePath, terrainName = 'Terrain', colour = [0.35, 0.7, 0.4], animation = null }) {
   if (!layout.godot) return null;
   const lines = [];
+  const animated = animation && animation.frames > 1;
   for (const slot of layout.slots) {
     const at = `${slot.x}:${slot.y}/0`;
+    if (animated) {
+      // A tile's next frame sits one whole sheet to its right. Godot counts
+      // the gap between frames in tiles.
+      const tile = `${slot.x}:${slot.y}`;
+      lines.push(`${tile}/animation_separation = Vector2i(${layout.cols - 1}, 0)`);
+      for (let k = 0; k < animation.frames; k++) lines.push(`${tile}/animation_frame_${k}/duration = ${Number(animation.seconds || 0.2)}`);
+    }
     lines.push(`${at} = 0`);
     if (layout.family === 'dual') {
       if (!slot.key) continue;

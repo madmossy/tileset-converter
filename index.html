@@ -52,6 +52,16 @@
             <span>Tile size</span>
             <span class="with-unit"><input id="tile-size" type="number" min="2" step="2" placeholder="Auto" inputmode="numeric"> px</span>
           </label>
+          <div class="field" id="frames-field" hidden>
+            <span>Animation frames</span>
+            <span class="frame-fields">
+              <label class="with-unit"><input id="frame-cols" type="number" min="1" inputmode="numeric" aria-label="Frames across"> across</label>
+              <label class="with-unit"><input id="frame-rows" type="number" min="1" inputmode="numeric" aria-label="Frames down"> down</label>
+              <label class="with-unit"><input id="frame-gap" type="number" min="0" inputmode="numeric" aria-label="Spacing between frames"> px apart</label>
+              <label class="with-unit"><input id="frame-ms" type="number" min="20" step="10" value="200" inputmode="numeric" aria-label="Time per frame"> ms each</label>
+              <button type="button" class="secondary small" id="frame-auto">Detect</button>
+            </span>
+          </div>
           <label class="field check" id="key-row" hidden>
             <input type="checkbox" id="key-on" checked>
             <span>Treat the border colour <span class="swatch" id="key-swatch"></span> as transparent</span>

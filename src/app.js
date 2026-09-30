@@ -35,6 +35,17 @@ const state = {
   // Foreground and background fill squares picked by hand, and which one is
   // being picked right now.
   plain: { fill: null, background: null, tileSize: 0, picking: null },
+  // Animation: the frames found (or set by hand, frameSet), each frame's
+  // image and pieces, and which frame the previews are showing.
+  frames: null,
+  frameSet: null,
+  framesFor: null,
+  detectedFrames: null,
+  frameImgs: [],
+  framePieces: null,
+  frameMs: 200,
+  frameWarning: null,
+  tick: 0,
   sourceScale: 1,
   source: null,
   error: null,
@@ -46,6 +57,11 @@ const state = {
 };
 
 const cards = new Map();
+// Animation: the timer, the redraw functions of the previews animating right
+// now, and the map's own one.
+let animationTimer = 0;
+let animated = [];
+let mapDraw = null;
 const guideCache = new Map();
 
 init();
@@ -112,6 +128,7 @@ function wire() {
   }
   wirePicking();
   wirePlain();
+  wireFrames();
 
   $('#paint-layout').addEventListener('change', (e) => { state.paint = e.target.value; renderMap(); });
   $('#show-grid').addEventListener('change', (e) => { state.grid = e.target.checked; renderMap(); });
@@ -158,6 +175,8 @@ async function loadBlob(blob, name) {
     state.autoFor = null;
     resetPicks();
     state.plain = { fill: null, background: null, tileSize: 0, picking: null };
+    state.frameSet = null;
+    state.framesFor = null;
     state.show = 'tiles';
   } catch {
     state.raw = null;
@@ -172,12 +191,16 @@ async function loadBlob(blob, name) {
 function analyse() {
   state.source = null;
   state.error = null;
+  state.framePieces = null;
+  state.frameWarning = null;
   if (!state.raw) return;
-  state.img = state.key && state.keyOn ? core.keyOut(state.raw, state.key) : state.raw;
+  const full = state.key && state.keyOn ? core.keyOut(state.raw, state.key) : state.raw;
+  splitIntoFrames(full);
+  state.img = state.frameImgs[0];
   // The automatic reading: shown as it is for 'auto', and its tile size is
   // the starting grid for picking by hand.
   const plain = plainPicks();
-  const autoFor = [state.keyOn, state.swap, state.tileSize, JSON.stringify(plain)].join('|');
+  const autoFor = [state.keyOn, state.swap, state.tileSize, JSON.stringify(plain), JSON.stringify(state.frames)].join('|');
   if (state.autoFor !== autoFor) {
     state.autoFor = autoFor;
     try {
@@ -200,6 +223,80 @@ function analyse() {
       state.error = err.message;
     }
   }
+  // Every other frame is read the way the first one was.
+  if (state.source && state.frameImgs.length > 1) {
+    state.framePieces = state.frameImgs.map((img, k) => (k ? core.readFrame(img, state.source, { plain }) : state.source.pieces));
+  }
+}
+
+/** Find the frames in the image (or use the ones set by hand) and cut them out. */
+function splitIntoFrames(full) {
+  const framesFor = [state.keyOn, full.width, full.height].join('|');
+  if (state.framesFor !== framesFor) {
+    state.framesFor = framesFor;
+    state.detectedFrames = core.detectFrames(full);
+  }
+  let frames = state.detectedFrames;
+  if (state.frameSet) {
+    frames = core.frameLayout(full, state.frameSet);
+    if (!frames) {
+      const { cols, rows, spacing } = state.frameSet;
+      state.frameWarning = `${cols} × ${rows} frames ${spacing}px apart don't divide your ${full.width}×${full.height} image evenly, so it's read as one frame.`;
+      frames = core.singleFrame(full);
+    }
+  }
+  state.frames = frames;
+  state.frameImgs = frames.cols * frames.rows > 1 ? core.splitFrames(full, frames) : [full];
+}
+
+function frameCount() {
+  return state.frames ? state.frames.cols * state.frames.rows : 1;
+}
+
+function wireFrames() {
+  const inputs = ['#frame-cols', '#frame-rows', '#frame-gap'].map((id) => $(id));
+  for (const input of inputs) {
+    input.addEventListener('change', () => {
+      const [cols, rows, spacing] = inputs.map((i) => Math.max(0, Math.round(Number(i.value)) || 0));
+      state.frameSet = { cols: Math.max(1, cols), rows: Math.max(1, rows), spacing };
+      analyse();
+      update();
+    });
+  }
+  $('#frame-auto').addEventListener('click', () => {
+    state.frameSet = null;
+    analyse();
+    update();
+  });
+  $('#frame-ms').addEventListener('change', (e) => {
+    const ms = Math.round(Number(e.target.value));
+    state.frameMs = Number.isFinite(ms) && ms >= 20 ? ms : 200;
+    e.target.value = state.frameMs;
+    startAnimation();
+  });
+  startAnimation();
+}
+
+/** Step every animated preview on to the next frame, every frameMs. */
+function startAnimation() {
+  clearInterval(animationTimer);
+  animationTimer = setInterval(() => {
+    if (!animated.length) return;
+    state.tick++;
+    for (const draw of animated) draw();
+  }, state.frameMs);
+}
+
+function renderFrames() {
+  const has = !!state.raw;
+  $('#frames-field').hidden = !has;
+  if (!has || !state.frames) return;
+  // What you typed stays put, even when it doesn't fit.
+  const f = state.frameSet || state.frames;
+  $('#frame-cols').value = f.cols;
+  $('#frame-rows').value = f.rows;
+  $('#frame-gap').value = f.spacing;
+  $('#frame-auto').disabled = !state.frameSet;
 }
 
 /** The fill squares picked by hand, for the reader; null if none. */
@@ -211,8 +308,8 @@ function plainPicks() {
 /** The pieces the outputs are built from: the source's, or blank placeholders. */
 function current() {
   const t = state.source?.tileSize || (state.read === 'pick' && state.raw ? pickTileSize() : state.tileSize) || 16;
-  if (state.show === 'tiles' && state.source) return { pieces: state.source.pieces, t, blank: false };
-  return { pieces: guidePiecesFor(t), t, blank: true };
+  if (state.show === 'tiles' && state.source) return { pieces: state.source.pieces, frames: state.framePieces, t, blank: false };
+  return { pieces: guidePiecesFor(t), frames: null, t, blank: true };
 }
 
 function guidePiecesFor(t) {
@@ -468,6 +565,8 @@ function hex(rgb) {
 // Rendering
 
 function update() {
+  animated = [];
+  renderFrames();
   renderSource();
   renderStatus();
   renderPick();
@@ -653,6 +752,12 @@ function renderStatus() {
   }
   const src = state.source;
   const s = core.summarise(src.pieces);
+  if (state.frameWarning) box.append(statusLine(state.frameWarning, 'warn'));
+  if (frameCount() > 1) {
+    const f = state.frames;
+    const where = f.rows === 1 ? 'side by side' : f.cols === 1 ? 'one above the other' : `${f.cols} across and ${f.rows} down`;
+    box.append(statusLine(`It's an animation: ${frameCount()} frames of ${f.width}×${f.height}, ${where}${f.spacing ? `, ${f.spacing}px apart` : ''}${state.frameSet ? '' : ' (worked out automatically)'}. It reads the first frame, shown here, and every other frame the same way. The layouts below play all ${frameCount()}, the PNGs hold them side by side, and the Godot TileSets animate every tile.`));
+  }
   if (src.read === 'picked') {
     const n = src.tiles.length;
     const overhang = src.family === 'dual' ? ` and ${s.overhang.found} of the ${s.overhang.total} overhang pieces` : '';
@@ -797,11 +902,14 @@ function buildCards() {
 function renderCards() {
   const { pieces, t, blank } = current();
   const overhang = !blank && hasOverhangArt(pieces);
+  const { frames } = current();
   for (const entry of cards.values()) {
-    const sheet = core.composeSheet(pieces, entry.layout, t);
+    const sheets = (frames || [pieces]).map((p) => core.composeSheet(p, entry.layout, t));
     const width = entry.canvas.parentElement.clientWidth || 280;
     entry.t = t;
-    entry.scale = paint(entry.canvas, sheet, { maxWidth: width, maxHeight: 420, maxScale: 8, grid: t });
+    const draw = () => { entry.scale = paint(entry.canvas, sheets[state.tick % sheets.length], { maxWidth: width, maxHeight: 420, maxScale: 8, grid: t }); };
+    draw();
+    if (sheets.length > 1) animated.push(draw);
     const trims = overhang && entry.layout.family === 'blob';
     entry.note.hidden = !trims;
     if (trims) entry.note.textContent = 'Your art spills past the edge of each cell. Blob tiles can only draw inside their own cell, so here the terrain is drawn a little smaller, with its whole edge inside the tile. The dual-grid layouts draw it exactly as it is.';
@@ -814,17 +922,19 @@ function fileBase(layout) {
 }
 
 function downloadPng(layout) {
-  const { pieces, t } = current();
-  toCanvas(core.composeSheet(pieces, layout, t)).toBlob((blob) => save(blob, fileBase(layout) + '.png'), 'image/png');
+  const { pieces, frames, t } = current();
+  const sheet = frames ? core.composeFrames(frames, layout, t) : core.composeSheet(pieces, layout, t);
+  toCanvas(sheet).toBlob((blob) => save(blob, fileBase(layout) + '.png'), 'image/png');
 }
 
 function downloadTres(layout) {
-  const { t } = current();
+  const { frames, t } = current();
   let dir = $('#godot-dir').value.trim() || 'res://';
   if (!dir.startsWith('res://')) dir = 'res://' + dir.replace(/^\/+/, '');
   if (!dir.endsWith('/')) dir += '/';
   const base = fileBase(layout);
-  const text = core.godotTileSet(layout, { tileSize: t, texturePath: dir + base + '.png', terrainName: $('#terrain-name').value.trim() || 'Terrain' });
+  const animation = frames ? { frames: frames.length, seconds: state.frameMs / 1000 } : null;
+  const text = core.godotTileSet(layout, { tileSize: t, texturePath: dir + base + '.png', terrainName: $('#terrain-name').value.trim() || 'Terrain', animation });
   save(new Blob([text], { type: 'text/plain' }), base + '.tres');
 }
 
@@ -832,13 +942,17 @@ function downloadTres(layout) {
 // Try it: a paintable map
 
 function renderMap() {
-  const { pieces, t } = current();
+  const { pieces, frames, t } = current();
   const layout = core.layoutById(state.paint);
-  const sheet = core.composeSheet(pieces, layout, t);
-  const img = core.renderMap(state.world, t, layout, sheet, pieces);
+  const maps = (frames || [pieces]).map((p) => core.renderMap(state.world, t, layout, core.composeSheet(p, layout, t), p));
   const width = $('#map-wrap').clientWidth || 600;
-  const scale = paint($('#map'), img, { maxWidth: width, maxScale: 6, grid: state.grid ? t : 0 });
-  state.mapCell = t * scale;
+  animated = animated.filter((draw) => draw !== mapDraw);
+  mapDraw = () => {
+    const scale = paint($('#map'), maps[state.tick % maps.length], { maxWidth: width, maxScale: 6, grid: state.grid ? t : 0 });
+    state.mapCell = t * scale;
+  };
+  mapDraw();
+  if (maps.length > 1) animated.push(mapDraw);
 }
 
 function wireMapPainting() {

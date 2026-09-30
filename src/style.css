@@ -189,6 +189,8 @@ select, input[type="number"], input:not([type]) {
 }
 .with-unit { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .with-unit input { width: 110px; }
+.frame-fields { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.frame-fields input { width: 72px; }
 
 .swatch {
   display: inline-block;

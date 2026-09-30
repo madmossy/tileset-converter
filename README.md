@@ -19,6 +19,8 @@ It runs entirely in your browser. Your images never leave your computer.
 
    It uses two plain squares: the *foreground fill* (the plain middle of your terrain) and the *background fill* (what the terrain sits on). It takes each from a plain square in your image if there is one. Otherwise the foreground fill is a flat patch of your terrain's colour, and the background fill is a flat patch of the background's colour, or see-through for see-through art. To choose them yourself, click **Pick a square** under *Plain squares*, then a tile in your image.
 
+   **Animated tiles** work too: put the frames side by side or one above the other (a gap between them is fine). The converter finds the frames, reads the first, and reads every other frame the same way. If it gets the frames wrong, set how many there are across and down, and how many pixels apart, under *Animation frames*. The layouts then play every frame. Each PNG holds the frames side by side, and each Godot TileSet animates every tile, showing each frame for the time you set.
+
    If it can't make sense of your image, set **Read it as** to **Let me pick the tiles**. Say whether your tiles are dual-grid or blob tiles, then click a slot and the tile in your image that goes in it. Two tiles are enough: the slots marked with a dot, one with an outer corner and one with an inner corner. Everything else is mirrored from those, so pick more if your art is lit from one side.
 2. **Download the layouts you want.** Each card has the PNG, and the autotile layouts also have a Godot TileSet. Put the PNG in the folder named in *Where the PNGs will live*, then open the `.tres` in Godot.
 3. **Try it.** Paint on the map at the bottom to see the sheet working the way a game would draw it.
@@ -66,7 +68,7 @@ The same converter runs in Node (20 or newer), with no dependencies:
 node cli.mjs examples/dual-example.png --out out
 ```
 
-Options: `--read auto|dual|terrain|<layout id>`, `--tile N`, `--only dual-standard,blob-godot`, `--godot-dir res://tiles/`, `--terrain Grass`, `--fill X,Y` and `--background X,Y` to take the foreground and background fills from a tile (column and row, from 0), and `--blank --tile 16` for blank templates. For tiles on a solid background, `--swap` swaps which colour is the terrain. An image with no transparency has its border colour made see-through (unless that colour is the terrain's); `--keep-border` stops that.
+Options: `--read auto|dual|terrain|<layout id>`, `--tile N`, `--only dual-standard,blob-godot`, `--godot-dir res://tiles/`, `--terrain Grass`, `--fill X,Y` and `--background X,Y` to take the foreground and background fills from a tile (column and row, from 0), `--frames 8x1 --spacing 2 --frame-ms 150` for animation frames (found automatically otherwise), and `--blank --tile 16` for blank templates. For tiles on a solid background, `--swap` swaps which colour is the terrain. An image with no transparency has its border colour made see-through (unless that colour is the terrain's); `--keep-border` stops that.
 
 ## Developing
 

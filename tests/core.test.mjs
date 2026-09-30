@@ -340,6 +340,76 @@ test('the foreground and background fills can be picked by hand', () => {
   }
 });
 
+/** An animation of the water example: `count` frames `spacing` apart,
+ *  across (or down), with a sparkle moving through the water. */
+function animatedWater(t, count, spacing, axis = 'x') {
+  const base = exampleImage(t, { water: true });
+  const across = axis === 'x';
+  const out = core.createImage(across ? count * base.width + (count - 1) * spacing : base.width, across ? base.height : count * base.height + (count - 1) * spacing);
+  const frames = [];
+  for (let k = 0; k < count; k++) {
+    const f = { width: base.width, height: base.height, data: base.data.slice() };
+    for (let i = 0; i < f.data.length; i += 4) {
+      const p = i / 4, x = p % f.width, y = Math.floor(p / f.width);
+      if (f.data.subarray(i, i + 3).join() === WATER.join() && (x + 2 * y + 3 * k) % 11 === 0) f.data.set([120, 180, 230, 255], i);
+    }
+    core.blitRegion(f, 0, 0, f.width, f.height, out, across ? k * (base.width + spacing) : 0, across ? 0 : k * (base.height + spacing));
+    frames.push(f);
+  }
+  return { img: out, frames, base };
+}
+
+test('animation frames are found side by side or stacked, with or without gaps', () => {
+  const t = 16;
+  for (const [count, spacing, axis] of [[8, 0, 'x'], [4, 2, 'x'], [3, 0, 'y'], [2, 5, 'y']]) {
+    const { img, frames, base } = animatedWater(t, count, spacing, axis);
+    const found = core.detectFrames(img);
+    const expect = axis === 'x' ? { cols: count, rows: 1 } : { cols: 1, rows: count };
+    assert.deepEqual(found, { ...expect, spacing, width: base.width, height: base.height }, `${count} ${axis} ${spacing}px`);
+    core.splitFrames(img, found).forEach((frame, k) => assert.deepEqual(frame.data, frames[k].data, `frame ${k}`));
+  }
+  // Still sheets are one frame.
+  for (const pieces of [examplePieces(16), examplePiecesOnWater(16), examplePieces(32)]) {
+    const tile = pieces.half * 2;
+    for (const layout of core.LAYOUTS) {
+      const f = core.detectFrames(core.composeSheet(pieces, layout, tile));
+      assert.deepEqual([f.cols, f.rows], [1, 1], layout.id);
+    }
+  }
+  for (const img of [example(), waterExample(t)]) assert.deepEqual(core.detectFrames(img), core.singleFrame(img));
+  // Frames set by hand must divide the image evenly.
+  const { img } = animatedWater(t, 4, 2, 'x');
+  assert.deepEqual(core.frameLayout(img, { cols: 4, rows: 1, spacing: 2 }), { cols: 4, rows: 1, spacing: 2, width: 48, height: 80 });
+  assert.equal(core.frameLayout(img, { cols: 5, rows: 1, spacing: 0 }), null);
+});
+
+test('every frame is read like the first, and the sheets and TileSets animate', () => {
+  const t = 16, count = 4;
+  const { img, frames } = animatedWater(t, count, 2, 'x');
+  const split = core.splitFrames(img, core.detectFrames(img));
+  const source = core.readSource(split[0]);
+  const framePieces = split.map((frame, k) => (k ? core.readFrame(frame, source) : source.pieces));
+  const layout = core.layoutById('dual-standard');
+  const strip = core.composeFrames(framePieces, layout, t);
+  assert.deepEqual([strip.width, strip.height], [count * layout.cols * t, layout.rows * t]);
+  // Each frame's sheet is what reading that frame on its own would give.
+  framePieces.forEach((pieces, k) => {
+    const alone = core.readSource(frames[k]).pieces;
+    const sheet = core.composeSheet(pieces, layout, t);
+    assert.deepEqual(sheet.data, core.composeSheet(alone, layout, t).data, `frame ${k}`);
+    const cut = core.createImage(sheet.width, sheet.height);
+    core.blitRegion(strip, k * sheet.width, 0, sheet.width, sheet.height, cut, 0, 0);
+    assert.deepEqual(cut.data, sheet.data, `frame ${k} in the strip`);
+  });
+  assert.notDeepEqual(core.composeSheet(framePieces[0], layout, t).data, core.composeSheet(framePieces[1], layout, t).data, 'the frames differ');
+  const tres = core.godotTileSet(layout, { tileSize: t, texturePath: 'res://a.png', animation: { frames: count, seconds: 0.25 } });
+  // Godot counts the gap between a tile's frames in tiles: the rest of the sheet.
+  assert.equal(tres.match(/\/animation_separation = Vector2i\(3, 0\)$/gm).length, 16);
+  assert.equal(tres.match(/^0:0\/animation_frame_\d\/duration = 0.25$/gm).length, count);
+  assert.ok(tres.indexOf('0:0/animation_frame_3/duration') < tres.indexOf('0:0/0 = 0'), 'the animation comes before the tile');
+  assert.doesNotMatch(core.godotTileSet(layout, { tileSize: t, texturePath: 'res://a.png' }), /animation/);
+});
+
 test('painting a map on a solid background shows the background away from the terrain', () => {
   const t = 16;
   const { pieces } = core.readSource(waterExample(t));

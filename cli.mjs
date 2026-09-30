@@ -23,11 +23,15 @@ const USAGE = `Usage: node cli.mjs <image.png> [options]
   --fill X,Y        take the foreground fill (the plain middle of the terrain)
                     from the tile at column X, row Y, counting from 0
   --background X,Y  take the background fill from the tile at column X, row Y
+  --frames CxR      an animation: C frames across and R down (default: work
+                    it out; 1x1 for a still image)
+  --spacing N       pixels between animation frames (with --frames)
+  --frame-ms N      how long each frame shows in Godot (default: 200)
   --blank           write blank templates instead of converting an image
                     (needs --tile; no image argument)`;
 
 function parseArgs(argv) {
-  const args = { read: 'auto', tile: 0, out: 'out', only: null, godotDir: 'res://tiles/', terrain: 'Terrain', blank: false, swap: false, keepBorder: false, fill: null, background: null, input: null };
+  const args = { read: 'auto', tile: 0, out: 'out', only: null, godotDir: 'res://tiles/', terrain: 'Terrain', blank: false, swap: false, keepBorder: false, fill: null, background: null, frames: null, spacing: 0, frameMs: 200, input: null };
   const tileAt = (flag, value) => {
     const m = /^(\d+),(\d+)$/.exec(value);
     if (!m) throw new Error(`${flag} takes a tile's column and row, like 2,4.`);
@@ -50,6 +54,12 @@ function parseArgs(argv) {
     else if (a === '--keep-border') args.keepBorder = true;
     else if (a === '--fill') args.fill = tileAt(a, next());
     else if (a === '--background') args.background = tileAt(a, next());
+    else if (a === '--frames') {
+      const m = /^(\d+)x(\d+)$/.exec(next());
+      if (!m) throw new Error('--frames takes frames across and down, like 8x1.');
+      args.frames = { cols: Number(m[1]), rows: Number(m[2]) };
+    } else if (a === '--spacing') args.spacing = Number(next());
+    else if (a === '--frame-ms') args.frameMs = Number(next());
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a.startsWith('--')) throw new Error(`Unknown option ${a}.`);
     else args.input = a;
@@ -63,7 +73,7 @@ function main() {
     console.log(USAGE);
     return;
   }
-  let pieces, tileSize, name;
+  let pieces, tileSize, name, framePieces = null, frames = null;
   if (args.blank) {
     if (!args.tile) throw new Error('--blank needs --tile.');
     tileSize = args.tile;
@@ -76,8 +86,15 @@ function main() {
       if (core.isBackdrop(img, border)) img = core.keyOut(img, border);
     }
     const plain = args.fill || args.background ? { fill: args.fill, background: args.background } : null;
-    const source = core.readSource(img, { read: args.read, tileSize: args.tile, swap: args.swap, plain });
+    frames = args.frames ? core.frameLayout(img, { ...args.frames, spacing: args.spacing }) : core.detectFrames(img);
+    if (!frames) throw new Error(`${args.frames.cols}x${args.frames.rows} frames ${args.spacing}px apart don't divide the ${img.width}x${img.height} image evenly.`);
+    const frameImgs = frames.cols * frames.rows > 1 ? core.splitFrames(img, frames) : [img];
+    const source = core.readSource(frameImgs[0], { read: args.read, tileSize: args.tile, swap: args.swap, plain });
     ({ pieces, tileSize } = source);
+    if (frameImgs.length > 1) {
+      framePieces = frameImgs.map((frame, k) => (k ? core.readFrame(frame, source, { plain }) : pieces));
+      console.log(`An animation: ${frameImgs.length} frames of ${frames.width}x${frames.height}${frames.spacing ? `, ${frames.spacing}px apart` : ''}. Every sheet holds them side by side.`);
+    }
     name = basename(args.input, extname(args.input));
     const s = core.summarise(pieces);
     const hex = (rgb) => '#' + rgb.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
@@ -93,8 +110,10 @@ function main() {
   for (const layout of core.LAYOUTS) {
     if (args.only && !args.only.includes(layout.id)) continue;
     const file = `${name}_${layout.file}`;
-    writeFileSync(join(args.out, file + '.png'), encodePng(core.composeSheet(pieces, layout, tileSize)));
-    const tres = core.godotTileSet(layout, { tileSize, texturePath: dir + file + '.png', terrainName: args.terrain });
+    const sheet = framePieces ? core.composeFrames(framePieces, layout, tileSize) : core.composeSheet(pieces, layout, tileSize);
+    writeFileSync(join(args.out, file + '.png'), encodePng(sheet));
+    const animation = framePieces ? { frames: framePieces.length, seconds: args.frameMs / 1000 } : null;
+    const tres = core.godotTileSet(layout, { tileSize, texturePath: dir + file + '.png', terrainName: args.terrain, animation });
     if (tres) writeFileSync(join(args.out, file + '.tres'), tres);
     console.log(`  ${file}.png${tres ? ' + .tres' : ''}  (${layout.name})`);
   }
