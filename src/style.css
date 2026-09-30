@@ -226,6 +226,36 @@ select, input[type="number"], input:not([type]) {
 .source-controls { display: grid; gap: 14px; align-content: start; min-width: 0; }
 
 .status { display: grid; gap: 8px; }
+
+.pick { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.pick-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.pick-title { font-weight: 600; }
+.pick .seg { margin-left: 0; }
+.pick .hint { margin-top: 0; }
+.pick-board { display: grid; gap: 6px; justify-content: start; }
+.pick-slot {
+  position: relative;
+  padding: 3px;
+  border-radius: 6px;
+  border: 2px solid var(--line);
+  background: var(--field);
+  line-height: 0;
+}
+.pick-slot canvas { display: block; image-rendering: pixelated; }
+.pick-slot.empty canvas { opacity: 0.4; }
+.pick-slot[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.pick-slot .need {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 99px;
+  background: var(--warn);
+  border: 2px solid var(--panel);
+}
+.pick-readout { font-size: 0.8rem; color: var(--muted); min-height: 1.5em; }
+.source-view canvas.picking { cursor: pointer; }
 .status .line { padding: 10px 12px; border-radius: 8px; background: var(--field); border: 1px solid var(--line); }
 .status .line.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
 .status .line.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }

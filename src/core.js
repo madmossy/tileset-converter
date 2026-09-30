@@ -789,6 +789,69 @@ export function readSource(img, { read = 'auto', tileSize = 0, swap = false } = 
 }
 
 // ---------------------------------------------------------------------------
+// Picking tiles by hand
+
+function islandSlots() {
+  // A 3x3 island (outer corners, edges and fill), and beside it the four
+  // cells around a one-cell hole in solid terrain (the inner corners).
+  const island = (x, y) => x >= 0 && y >= 0 && x < 3 && y < 3;
+  const holed = (x, y) => !(x === 1 && y === 1);
+  const slots = [];
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) slots.push({ x, y, key: maskAt(island, x, y) });
+  for (const [x, y] of [[0, 0], [2, 0], [0, 2], [2, 2]]) slots.push({ x: 3 + (x >> 1), y: y >> 1, key: maskAt(holed, x, y) });
+  return slots;
+}
+
+/** Boards of slots for pointing at tiles yourself, when the converter can't
+ *  read an image's arrangement on its own. Each slot's key is a dual tile's
+ *  corner bits or a blob tile's neighbour mask, as in LAYOUTS.
+ *  `minimum` lists two slots that are enough on their own: one tile with an
+ *  outer corner and one with an inner corner show every kind of terrain piece
+ *  at one corner or another, and mirroring makes the rest. */
+export const PICK_BOARDS = {
+  dual: {
+    family: 'dual',
+    name: 'Dual-grid tiles',
+    cols: 4,
+    rows: 4,
+    slots: fromRows(DUAL_STANDARD),
+    minimum: [TL | TR | BL, BR],
+  },
+  blob: {
+    family: 'blob',
+    name: 'Blob tiles',
+    cols: 5,
+    rows: 3,
+    slots: islandSlots(),
+    minimum: [E | SE | S, 255 & ~SE],
+  },
+};
+
+/** Read pieces from tiles picked by hand. `picks` is [{ key, x, y }]: a board
+ *  slot's key, and the grid position of the image tile that fills it. Pieces
+ *  the picks don't show are made from the ones they do, as for any source.
+ *  Returns the same shape as readSource, with read 'picked'. */
+export function readPicked(img, { family, tileSize, picks }) {
+  const t = tileSize;
+  if (!t || t < 2 || t % 2) throw new Error(`The tile size has to be an even number of pixels (got ${t}), because every tile is cut into quarters.`);
+  const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
+  const slots = picks.filter((p) => p.x < cols && p.y < rows);
+  const { pieces, tiles } = extract(img, t, null, { layout: { family, slots } });
+  completePieces(pieces);
+  return { read: 'picked', family, tileSize: t, pieces, tiles, cols, rows, split: null };
+}
+
+/** Kinds of terrain piece that no source tile showed at any corner, so they
+ *  had to be made up from the fill. (A flat fill is fine: it's said separately.) */
+export function missingKinds(pieces) {
+  const shown = (kind) => [0, 1, 2, 3].some((pos) => {
+    const p = pieces.get(pos, kind);
+    return p && (p.how === 'found' || p.how === 'mirrored' || p.how === 'copied');
+  });
+  return FILLED_KINDS.filter((kind) => kind !== 'fill' && !shown(kind));
+}
+
+// ---------------------------------------------------------------------------
 // Filling gaps
 
 /** Where to borrow a missing overhang piece from: layered combinations of others. */

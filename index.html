@@ -57,6 +57,22 @@
             <span>Treat the border colour <span class="swatch" id="key-swatch"></span> as transparent</span>
           </label>
           <div id="status" class="status" aria-live="polite"></div>
+          <div class="pick" id="pick" hidden>
+            <div class="pick-head">
+              <span class="pick-title">Your tiles are</span>
+              <div class="seg" role="group" aria-label="Kind of tiles">
+                <button type="button" data-family="dual" aria-pressed="true">Dual-grid tiles</button>
+                <button type="button" data-family="blob" aria-pressed="false">Blob tiles</button>
+              </div>
+            </div>
+            <p class="hint" id="pick-hint"></p>
+            <div class="pick-board" id="pick-board" role="group" aria-label="Slots to fill"></div>
+            <p class="pick-readout" id="pick-readout"></p>
+            <div class="button-row">
+              <button type="button" class="secondary small" id="pick-clear">Empty this slot</button>
+              <button type="button" class="secondary small" id="pick-clear-all">Empty them all</button>
+            </div>
+          </div>
           <details id="pieces-details">
             <summary>The pieces it found</summary>
             <p class="hint">Every tile, in every layout, is four quarter-tiles. Each quarter belongs to one terrain cell and looks the way it does because of three neighbours: the one above or below, the one beside, and the diagonal. These are all the quarters your image showed, and how the missing ones were filled in.</p>

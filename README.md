@@ -16,6 +16,8 @@ It runs entirely in your browser. Your images never leave your computer.
    The empty parts can be see-through, or filled in with a second terrain, such as grass drawn on water. With a solid background, the converter tells the two apart by colour and shows which one it took as the terrain. Click **Swap them** if it picked the wrong way round.
 
    The converter works out the tile size and which kind it is. Dots on the preview show what it found. If it guesses wrong, set **Read it as** and **Tile size** yourself.
+
+   If it can't make sense of your image, set **Read it as** to **Let me pick the tiles**. Say whether your tiles are dual-grid or blob tiles, then click a slot and the tile in your image that goes in it. Two tiles are enough: the slots marked with a dot, one with an outer corner and one with an inner corner. Everything else is mirrored from those, so pick more if your art is lit from one side.
 2. **Download the layouts you want.** Each card has the PNG, and the autotile layouts also have a Godot TileSet. Put the PNG in the folder named in *Where the PNGs will live*, then open the `.tres` in Godot.
 3. **Try it.** Paint on the map at the bottom to see the sheet working the way a game would draw it.
 

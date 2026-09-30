@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as core from '../src/core.js';
 import { decodePng, encodePng } from '../tools/png.mjs';
-import { exampleImage, EXAMPLE_TILES } from '../tools/example-art.mjs';
+import { exampleImage, examplePieces, EXAMPLE_TILES } from '../tools/example-art.mjs';
 
 const example = () => decodePng(readFileSync(new URL('../examples/dual-example.png', import.meta.url)));
 
@@ -16,6 +16,8 @@ function waterExample(t, { fillSwatch = false } = {}) {
   if (!fillSwatch) core.blitRegion(core.createImage(t, t), 0, 0, t, t, img, 2 * t, 4 * t);
   return img;
 }
+
+const examplePiecesOnWater = (t) => examplePieces(t, { water: true });
 
 const nearer = (rgb, a, b) => {
   const d = (c) => c.reduce((sum, v, i) => sum + (v - rgb[i]) ** 2, 0);
@@ -282,6 +284,75 @@ test('a solid image keeps its border colour when that colour is the terrain', ()
   assert.equal(core.isBackdrop(img, border), false);
   assert.equal(core.isBackdrop(img, WATER), true);
   assert.deepEqual(core.readSource(img).tiles.map((tile) => tile.key).slice(0, 9), exampleKeys(true).map((tile) => tile.key).slice(0, 9));
+});
+
+test('each pick board holds distinct slots, and its two minimum slots show every kind of terrain piece', () => {
+  for (const [family, board] of Object.entries(core.PICK_BOARDS)) {
+    assert.equal(board.family, family);
+    const keys = board.slots.map((slot) => slot.key);
+    assert.equal(new Set(keys).size, keys.length, family);
+    if (family === 'blob') for (const key of keys) assert.equal(core.canonicalMask(key), key, `${family} ${key}`);
+    assert.equal(new Set(board.slots.map((s) => `${s.x},${s.y}`)).size, keys.length, `${family}: one slot per place`);
+    for (const key of board.minimum) assert.ok(keys.includes(key), `${family} ${key}`);
+    const kinds = new Set(board.minimum.flatMap((key) => core.recipeFor(board, key).map((part) => part.kind)));
+    for (const kind of ['outer', 'hedge', 'vedge', 'inner']) assert.ok(kinds.has(kind), `${family} minimum lacks ${kind}`);
+  }
+  assert.equal(core.PICK_BOARDS.dual.slots.length, 16);
+  assert.equal(core.PICK_BOARDS.blob.slots.length, 13);
+});
+
+/** A sheet with each of a board's tiles in a scrambled spot, and the picks
+ *  that point at them. */
+function scrambled(pieces, board, t) {
+  const cols = 5;
+  const img = core.createImage(cols * t, Math.ceil(board.slots.length / cols) * t);
+  const picks = [...board.slots].reverse().map((slot, n) => {
+    const x = (n * 3) % cols, y = Math.floor(n / cols);
+    core.drawTile(img, pieces, core.recipeFor(board, slot.key), x * t, y * t, t);
+    return { key: slot.key, x, y };
+  });
+  return { img, picks };
+}
+
+test('tiles picked by hand in any arrangement read back to the pieces they came from', () => {
+  const t = 16;
+  const pieces = distinctPieces(t / 2);
+  for (const [family, board] of Object.entries(core.PICK_BOARDS)) {
+    const { img, picks } = scrambled(pieces, board, t);
+    const source = core.readPicked(img, { family, tileSize: t, picks });
+    assert.equal(source.read, 'picked');
+    assert.equal(source.tiles.length, board.slots.length);
+    assert.deepEqual(core.missingKinds(source.pieces), []);
+    // Dual tiles carry every piece; blob tiles only the terrain's own.
+    const layouts = core.LAYOUTS.filter((l) => family === 'dual' || l.family === 'blob');
+    for (const layout of layouts) {
+      assert.deepEqual(core.composeSheet(source.pieces, layout, t).data, core.composeSheet(pieces, layout, t).data, `${family} -> ${layout.id}`);
+    }
+  }
+});
+
+test('the two minimum picks are enough to make every piece of terrain', () => {
+  const t = 16;
+  const pieces = examplePiecesOnWater(t);
+  for (const [family, board] of Object.entries(core.PICK_BOARDS)) {
+    const { img, picks } = scrambled(pieces, board, t);
+    const minimum = picks.filter((pick) => board.minimum.includes(pick.key));
+    const source = core.readPicked(img, { family, tileSize: t, picks: minimum });
+    assert.deepEqual(core.missingKinds(source.pieces), [], family);
+    const s = core.summarise(source.pieces);
+    assert.equal(s.terrain.missing, 0, family);
+    assert.equal(s.terrain.found + s.terrain.adapted + (s.flatFill ? 4 : 0), 20, `${family}: nothing stands in for a missing kind`);
+    // One pick short, and the kinds only it showed are missing.
+    const one = core.readPicked(img, { family, tileSize: t, picks: minimum.slice(0, 1) });
+    assert.ok(core.missingKinds(one.pieces).length > 0, family);
+  }
+});
+
+test('picks off the grid are ignored, and the tile size must split into quarters', () => {
+  const img = core.createImage(32, 32);
+  const source = core.readPicked(img, { family: 'dual', tileSize: 16, picks: [{ key: 15, x: 5, y: 0 }] });
+  assert.equal(source.tiles.length, 0);
+  assert.throws(() => core.readPicked(img, { family: 'dual', tileSize: 15, picks: [] }), /even number/);
 });
 
 test('painting a map gives the same picture whichever sheet of a family is used', () => {

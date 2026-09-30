@@ -12,6 +12,12 @@ const HOW_TEXT = {
   layered: (p) => `Not in your image: layered from ${p.from.kinds.map((k) => core.KIND_NAMES[k].toLowerCase()).join(' + ')}`,
 };
 const HOW_CLASS = { found: 'found', mirrored: 'adapted', copied: 'adapted', flat: 'made', 'stand-in': 'made', layered: 'made' };
+const KIND_PLURALS = { outer: 'outer corners', hedge: 'top or bottom edges', vedge: 'side edges', inner: 'inner corners' };
+const PICK_HINTS = {
+  dual: 'Dual-grid tiles sit where four cells meet, so each corner of a tile is the middle of a cell. ',
+  blob: 'Blob tiles each sit on one cell: here, a 3×3 island and the four inner corners around a hole. ',
+};
+const PICK_HOW = 'Click a slot, then the tile in your image that goes in it. The two slots marked with a dot are enough on their own: the rest are mirrored from them, so fill more in if your art is lit from one side.';
 
 const state = {
   raw: null,
@@ -22,6 +28,11 @@ const state = {
   key: null,
   keyOn: true,
   swap: false,
+  auto: null, // the automatic reading, kept for picking by hand
+  autoError: null,
+  autoFor: null,
+  pick: { family: 'dual', picks: { dual: new Map(), blob: new Map() }, selected: null, hover: null, size: 0 },
+  sourceScale: 1,
   source: null,
   error: null,
   show: 'tiles',
@@ -44,7 +55,10 @@ function init() {
   const sheets = document.createElement('optgroup');
   sheets.label = 'A finished sheet in this layout';
   for (const layout of core.LAYOUTS) sheets.append(new Option(layout.name, layout.id));
-  readSelect.append(drawn, sheets);
+  const other = document.createElement('optgroup');
+  other.label = 'Anything else';
+  other.append(new Option('Let me pick the tiles', 'pick'));
+  readSelect.append(drawn, sheets, other);
 
   const paintSelect = $('#paint-layout');
   for (const layout of core.LAYOUTS.filter((l) => l.paintable)) paintSelect.append(new Option(layout.name, layout.id));
@@ -90,9 +104,10 @@ function wire() {
   });
   $('#key-on').addEventListener('change', (e) => { state.keyOn = e.target.checked; analyse(); update(); });
 
-  for (const button of document.querySelectorAll('.seg button')) {
+  for (const button of document.querySelectorAll('.seg button[data-show]')) {
     button.addEventListener('click', () => { state.show = button.dataset.show; update(); });
   }
+  wirePicking();
 
   $('#paint-layout').addEventListener('change', (e) => { state.paint = e.target.value; renderMap(); });
   $('#show-grid').addEventListener('change', (e) => { state.grid = e.target.checked; renderMap(); });
@@ -136,6 +151,8 @@ async function loadBlob(blob, name) {
     state.keyOn = !state.key || core.isBackdrop(state.raw, state.key);
     $('#key-on').checked = state.keyOn;
     state.swap = false;
+    state.autoFor = null;
+    resetPicks();
     state.show = 'tiles';
   } catch {
     state.raw = null;
@@ -152,19 +169,147 @@ function analyse() {
   state.error = null;
   if (!state.raw) return;
   state.img = state.key && state.keyOn ? core.keyOut(state.raw, state.key) : state.raw;
-  try {
-    state.source = core.readSource(state.img, { read: state.read, tileSize: state.tileSize, swap: state.swap });
-  } catch (err) {
-    state.error = err.message;
+  // The automatic reading: shown as it is for 'auto', and its tile size is
+  // the starting grid for picking by hand.
+  const autoFor = [state.keyOn, state.swap, state.tileSize].join();
+  if (state.autoFor !== autoFor) {
+    state.autoFor = autoFor;
+    try {
+      state.auto = core.readSource(state.img, { tileSize: state.tileSize, swap: state.swap });
+      state.autoError = null;
+    } catch (err) {
+      state.auto = null;
+      state.autoError = err.message;
+    }
+  }
+  if (state.read === 'auto') {
+    state.source = state.auto;
+    state.error = state.autoError;
+  } else if (state.read === 'pick') {
+    readPicks();
+  } else {
+    try {
+      state.source = core.readSource(state.img, { read: state.read, tileSize: state.tileSize, swap: state.swap });
+    } catch (err) {
+      state.error = err.message;
+    }
   }
 }
 
 /** The pieces the outputs are built from: the source's, or blank placeholders. */
 function current() {
-  const t = state.source?.tileSize || state.tileSize || 16;
+  const t = state.source?.tileSize || (state.read === 'pick' && state.raw ? pickTileSize() : state.tileSize) || 16;
   if (state.show === 'tiles' && state.source) return { pieces: state.source.pieces, t, blank: false };
+  return { pieces: guidePiecesFor(t), t, blank: true };
+}
+
+function guidePiecesFor(t) {
   if (!guideCache.has(t)) guideCache.set(t, core.guidePieces(t));
-  return { pieces: guideCache.get(t), t, blank: true };
+  return guideCache.get(t);
+}
+
+// ---------------------------------------------------------------------------
+// Picking tiles by hand
+
+/** The grid picks are made on: the tile size you set, or the one it found. */
+function pickTileSize() {
+  return state.tileSize || state.auto?.tileSize || 16;
+}
+
+function resetPicks() {
+  const p = state.pick;
+  p.picks.dual.clear();
+  p.picks.blob.clear();
+  p.selected = core.PICK_BOARDS[p.family].minimum[0];
+  p.hover = null;
+}
+
+/** The source, from the tiles picked so far; none yet means no source. */
+function readPicks() {
+  const p = state.pick;
+  const t = pickTileSize();
+  if (p.size !== t) {
+    // On a different grid, the old picks point at the wrong pixels.
+    p.size = t;
+    p.picks.dual.clear();
+    p.picks.blob.clear();
+  }
+  const picks = [...p.picks[p.family]].map(([key, at]) => ({ key, ...at }));
+  if (!picks.length) return;
+  try {
+    state.source = core.readPicked(state.img, { family: p.family, tileSize: t, picks });
+  } catch (err) {
+    state.error = err.message;
+  }
+}
+
+/** After a pick: the next empty slot, the two needed ones first. */
+function nextSlot() {
+  const p = state.pick;
+  const board = core.PICK_BOARDS[p.family];
+  const picks = p.picks[p.family];
+  const needed = board.minimum.find((key) => !picks.has(key));
+  if (needed !== undefined) return needed;
+  const keys = board.slots.map((slot) => slot.key);
+  const from = keys.indexOf(p.selected);
+  for (let i = 1; i <= keys.length; i++) {
+    const key = keys[(from + i) % keys.length];
+    if (!picks.has(key)) return key;
+  }
+  return p.selected;
+}
+
+function wirePicking() {
+  const p = state.pick;
+  for (const button of document.querySelectorAll('#pick .seg button')) {
+    button.addEventListener('click', () => {
+      if (p.family === button.dataset.family) return;
+      p.family = button.dataset.family;
+      p.selected = nextSlot();
+      analyse();
+      update();
+    });
+  }
+  $('#pick-clear').addEventListener('click', () => {
+    p.picks[p.family].delete(p.selected);
+    analyse();
+    update();
+  });
+  $('#pick-clear-all').addEventListener('click', () => {
+    p.picks[p.family].clear();
+    p.selected = nextSlot();
+    analyse();
+    update();
+  });
+  const view = $('#source-view');
+  const tileAt = (e) => {
+    const t = pickTileSize();
+    const size = t * state.sourceScale;
+    const x = Math.floor(e.offsetX / size), y = Math.floor(e.offsetY / size);
+    return x >= 0 && y >= 0 && x < Math.floor(state.img.width / t) && y < Math.floor(state.img.height / t) ? { x, y } : null;
+  };
+  const same = (a, b) => (a && b ? a.x === b.x && a.y === b.y : a === b);
+  view.addEventListener('click', (e) => {
+    if (state.read !== 'pick' || !state.img || p.selected === null) return;
+    const at = tileAt(e);
+    if (!at) return;
+    p.picks[p.family].set(p.selected, at);
+    p.selected = nextSlot();
+    analyse();
+    update();
+  });
+  view.addEventListener('pointermove', (e) => {
+    if (state.read !== 'pick' || !state.img) return;
+    const at = tileAt(e);
+    if (same(at, p.hover)) return;
+    p.hover = at;
+    renderSource();
+  });
+  view.addEventListener('pointerleave', () => {
+    if (!p.hover) return;
+    p.hover = null;
+    renderSource();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -231,8 +376,9 @@ function hex(rgb) {
 function update() {
   renderSource();
   renderStatus();
+  renderPick();
   renderPieces();
-  for (const button of document.querySelectorAll('.seg button')) button.setAttribute('aria-pressed', String(button.dataset.show === state.show));
+  for (const button of document.querySelectorAll('.seg button[data-show]')) button.setAttribute('aria-pressed', String(button.dataset.show === state.show));
   renderCards();
   renderMap();
 }
@@ -247,12 +393,91 @@ function renderSource() {
   const canvas = $('#source-view');
   const box = $('#drop').clientWidth - 36;
   const src = state.source;
-  paint(canvas, state.img, {
+  const picking = state.read === 'pick';
+  canvas.classList.toggle('picking', picking);
+  state.sourceScale = paint(canvas, state.img, {
     maxWidth: Math.max(120, box),
     maxHeight: 460,
-    grid: src ? src.tileSize : 0,
-    overlay: src ? (ctx, s) => drawSourceMarks(ctx, s, src) : null,
+    grid: picking ? pickTileSize() : src ? src.tileSize : 0,
+    overlay: (ctx, s) => {
+      if (src) drawSourceMarks(ctx, s, src);
+      if (picking) drawPickMarks(ctx, s);
+    },
   });
+}
+
+/** Outline the picked tiles, the selected slot's boldest, and the tile under the pointer. */
+function drawPickMarks(ctx, s) {
+  const t = pickTileSize() * s;
+  const p = state.pick;
+  ctx.strokeStyle = css('--accent');
+  for (const [key, at] of p.picks[p.family]) {
+    const selected = key === p.selected;
+    ctx.lineWidth = selected ? 3 : 1.5;
+    ctx.setLineDash(selected ? [] : [4, 3]);
+    ctx.strokeRect(at.x * t + 2, at.y * t + 2, t - 4, t - 4);
+  }
+  ctx.setLineDash([]);
+  if (p.hover) {
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.strokeRect(p.hover.x * t + 1.5, p.hover.y * t + 1.5, t - 3, t - 3);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#ffffff';
+    ctx.strokeRect(p.hover.x * t + 1.5, p.hover.y * t + 1.5, t - 3, t - 3);
+  }
+}
+
+function renderPick() {
+  const on = state.read === 'pick' && !!state.raw;
+  $('#pick').hidden = !on;
+  if (!on) return;
+  const p = state.pick;
+  const board = core.PICK_BOARDS[p.family];
+  const picks = p.picks[p.family];
+  for (const button of document.querySelectorAll('#pick .seg button')) button.setAttribute('aria-pressed', String(button.dataset.family === p.family));
+  $('#pick-hint').textContent = PICK_HINTS[p.family] + PICK_HOW;
+  const t = pickTileSize();
+  const zoom = Math.max(1, Math.round(44 / t));
+  const missing = state.source ? core.missingKinds(state.source.pieces) : Object.keys(KIND_PLURALS);
+  const box = $('#pick-board');
+  box.style.gridTemplateColumns = `repeat(${board.cols}, max-content)`;
+  box.replaceChildren();
+  for (const slot of board.slots) {
+    const at = picks.get(slot.key);
+    const recipe = core.recipeFor(board, slot.key);
+    const needed = !at && board.minimum.includes(slot.key) && recipe.some((part) => missing.includes(part.kind));
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pick-slot' + (at ? '' : ' empty');
+    button.style.gridColumn = String(slot.x + 1);
+    button.style.gridRow = String(slot.y + 1);
+    button.setAttribute('aria-pressed', String(slot.key === p.selected));
+    const what = core.describeSlot(board, slot.key);
+    button.title = `${what}${at ? `. Tile (${at.x}, ${at.y})` : ''}`;
+    button.setAttribute('aria-label', `${what}. ${at ? `Tile (${at.x}, ${at.y})` : 'Empty'}${needed ? '. Needed' : ''}`);
+    const tile = core.createImage(t, t);
+    if (at) core.blitRegion(state.img, at.x * t, at.y * t, t, t, tile, 0, 0);
+    else core.drawTile(tile, guidePiecesFor(t), recipe, 0, 0, t);
+    const canvas = toCanvas(tile);
+    canvas.className = 'checker';
+    canvas.style.width = canvas.style.height = t * zoom + 'px';
+    button.append(canvas);
+    if (needed) button.append(Object.assign(document.createElement('span'), { className: 'need' }));
+    button.addEventListener('click', () => {
+      p.selected = slot.key;
+      renderPick();
+      renderSource();
+    });
+    box.append(button);
+  }
+  const at = picks.get(p.selected);
+  const what = p.selected === null ? '' : core.describeSlot(board, p.selected);
+  $('#pick-readout').textContent = p.selected === null ? '' : at
+    ? `${what}: tile (${at.x}, ${at.y}). Click another tile in your image to change it.`
+    : `${what}: click its tile in your image.`;
+  $('#pick-clear').disabled = !at;
+  $('#pick-clear-all').disabled = !picks.size;
 }
 
 /** Mark what the reading found: filled corners on dual tiles, filled cells on a drawing. */
@@ -260,7 +485,7 @@ function drawSourceMarks(ctx, s, src) {
   const t = src.tileSize * s;
   const accent = css('--accent');
   ctx.lineWidth = 1.5;
-  if (src.read === 'dual') {
+  if (src.read === 'dual' || (src.read === 'picked' && src.family === 'dual')) {
     const r = Math.max(2.5, t * 0.07);
     for (const tile of src.tiles) {
       for (let i = 0; i < 4; i++) {
@@ -297,15 +522,27 @@ function renderStatus() {
     box.append(statusLine(state.error, 'bad'));
     return;
   }
+  if (!state.source && state.raw && state.read === 'pick') {
+    box.append(statusLine(`Pick your tiles below, on a grid of ${pickTileSize()}px tiles. If the grid doesn't line up with your tiles, set the tile size. Until you pick some, the layouts show blank templates.`));
+    return;
+  }
   if (!state.source) {
     box.append(statusLine('No image yet. Until you add one, the layouts below show blank templates you can draw over.'));
     return;
   }
   const src = state.source;
-  const how = src.read === 'dual' ? 'dual-grid tiles' : src.read === 'terrain' ? 'a drawing of terrain' : `a ${core.layoutById(src.read).name} sheet`;
   const s = core.summarise(src.pieces);
-  box.append(statusLine(`Read as ${how}, with ${src.tileSize}px tiles${state.read === 'auto' ? ' (worked out automatically)' : ''}. Found ${s.terrain.found} of the ${s.terrain.total} terrain pieces and ${s.overhang.found} of the ${s.overhang.total} overhang pieces.`));
-  if (src.split) box.append(splitLine(src.split));
+  if (src.read === 'picked') {
+    const n = src.tiles.length;
+    const overhang = src.family === 'dual' ? ` and ${s.overhang.found} of the ${s.overhang.total} overhang pieces` : '';
+    box.append(statusLine(`Using the ${n} tile${n === 1 ? '' : 's'} you picked, with ${src.tileSize}px tiles. Found ${s.terrain.found} of the ${s.terrain.total} terrain pieces${overhang}.`));
+    const missing = core.missingKinds(src.pieces);
+    if (missing.length) box.append(statusLine(`None of your tiles shows ${listOf(missing.map((kind) => KIND_PLURALS[kind]))} yet, so the fill stands in for them. Fill in a slot marked with a dot.`, 'warn'));
+  } else {
+    const how = src.read === 'dual' ? 'dual-grid tiles' : src.read === 'terrain' ? 'a drawing of terrain' : `a ${core.layoutById(src.read).name} sheet`;
+    box.append(statusLine(`Read as ${how}, with ${src.tileSize}px tiles${state.read === 'auto' ? ' (worked out automatically)' : ''}. Found ${s.terrain.found} of the ${s.terrain.total} terrain pieces and ${s.overhang.found} of the ${s.overhang.total} overhang pieces.`));
+    if (src.split) box.append(splitLine(src.split));
+  }
   if (s.flatBackground) {
     box.append(statusLine(`There's no plain background tile in your image, so away from the terrain the background is flat ${hex(s.flatBackground)}.`, 'warn'));
   }
@@ -313,8 +550,12 @@ function renderStatus() {
     box.append(statusLine(`There's no fill tile in your image, so the middle of the terrain is flat ${hex(s.flatFill)}. Add a solid tile somewhere in the image to use real texture there.`, 'warn'));
   }
   const standIns = s.terrain.madeUp - (s.flatFill ? 4 : 0);
-  if (standIns > 0) box.append(statusLine(`${standIns} terrain pieces weren't in your image and use the fill instead. Open "The pieces it found" to see which.`, 'warn'));
+  if (standIns > 0 && src.read !== 'picked') box.append(statusLine(`${standIns} terrain pieces weren't in your image and use the fill instead. Open "The pieces it found" to see which.`, 'warn'));
   if (s.terrain.adapted > 0) box.append(statusLine(`${s.terrain.adapted} terrain pieces were mirrored from another corner. Check they still look right if your art has lighting from one side.`, 'warn'));
+}
+
+function listOf(items) {
+  return items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' or ' + items[items.length - 1];
 }
 
 /** For art on a solid background: which colour was taken as the terrain, and
