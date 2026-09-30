@@ -73,6 +73,25 @@
               <button type="button" class="secondary small" id="pick-clear-all">Empty them all</button>
             </div>
           </div>
+          <div class="plain" id="plain" hidden>
+            <p class="plain-title">Plain squares</p>
+            <div class="plain-row" data-role="fill">
+              <canvas class="checker"></canvas>
+              <p><strong>Foreground fill</strong>, the plain middle of your terrain: <span class="plain-how"></span></p>
+              <div class="button-row">
+                <button type="button" class="secondary small" data-act="pick">Pick a square</button>
+                <button type="button" class="secondary small" data-act="auto">Automatic</button>
+              </div>
+            </div>
+            <div class="plain-row" data-role="background">
+              <canvas class="checker"></canvas>
+              <p><strong>Background fill</strong>, what your terrain sits on: <span class="plain-how"></span></p>
+              <div class="button-row">
+                <button type="button" class="secondary small" data-act="pick">Pick a square</button>
+                <button type="button" class="secondary small" data-act="auto">Automatic</button>
+              </div>
+            </div>
+          </div>
           <details id="pieces-details">
             <summary>The pieces it found</summary>
             <p class="hint">Every tile, in every layout, is four quarter-tiles. Each quarter belongs to one terrain cell and looks the way it does because of three neighbours: the one above or below, the one beside, and the diagonal. These are all the quarters your image showed, and how the missing ones were filled in.</p>

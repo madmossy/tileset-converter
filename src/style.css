@@ -256,6 +256,12 @@ select, input[type="number"], input:not([type]) {
 }
 .pick-readout { font-size: 0.8rem; color: var(--muted); min-height: 1.5em; }
 .source-view canvas.picking { cursor: pointer; }
+
+.plain { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.plain-title { font-weight: 600; }
+.plain-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; align-items: center; font-size: 0.9rem; }
+.plain-row canvas { grid-row: span 2; border-radius: 4px; border: 1px solid var(--line); image-rendering: pixelated; }
+.plain-row .plain-how.picking { color: var(--accent); font-weight: 600; }
 .status .line { padding: 10px 12px; border-radius: 8px; background: var(--field); border: 1px solid var(--line); }
 .status .line.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
 .status .line.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }

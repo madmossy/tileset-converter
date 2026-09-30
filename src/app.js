@@ -4,7 +4,7 @@ import * as core from './core.js';
 const $ = (selector) => document.querySelector(selector);
 
 const HOW_TEXT = {
-  found: (p) => (p.from && p.from.x !== undefined ? `Found in tile (${p.from.x}, ${p.from.y})` : 'Found'),
+  found: (p) => (p.from && p.from.x !== undefined ? `${p.from.picked ? 'You picked' : 'Found in'} tile (${p.from.x}, ${p.from.y})` : 'Found'),
   mirrored: (p) => `Mirrored from the ${core.POSITION_NAMES[p.from.pos]} one`,
   copied: (p) => `Copied from the ${core.POSITION_NAMES[p.from.pos]} one`,
   flat: (p, kind) => (kind === core.EMPTY_KIND ? 'No plain background in your image: a flat colour' : 'No fill in your image: a flat colour'),
@@ -32,6 +32,9 @@ const state = {
   autoError: null,
   autoFor: null,
   pick: { family: 'dual', picks: { dual: new Map(), blob: new Map() }, selected: null, hover: null, size: 0 },
+  // Foreground and background fill squares picked by hand, and which one is
+  // being picked right now.
+  plain: { fill: null, background: null, tileSize: 0, picking: null },
   sourceScale: 1,
   source: null,
   error: null,
@@ -108,6 +111,7 @@ function wire() {
     button.addEventListener('click', () => { state.show = button.dataset.show; update(); });
   }
   wirePicking();
+  wirePlain();
 
   $('#paint-layout').addEventListener('change', (e) => { state.paint = e.target.value; renderMap(); });
   $('#show-grid').addEventListener('change', (e) => { state.grid = e.target.checked; renderMap(); });
@@ -153,6 +157,7 @@ async function loadBlob(blob, name) {
     state.swap = false;
     state.autoFor = null;
     resetPicks();
+    state.plain = { fill: null, background: null, tileSize: 0, picking: null };
     state.show = 'tiles';
   } catch {
     state.raw = null;
@@ -171,11 +176,12 @@ function analyse() {
   state.img = state.key && state.keyOn ? core.keyOut(state.raw, state.key) : state.raw;
   // The automatic reading: shown as it is for 'auto', and its tile size is
   // the starting grid for picking by hand.
-  const autoFor = [state.keyOn, state.swap, state.tileSize].join();
+  const plain = plainPicks();
+  const autoFor = [state.keyOn, state.swap, state.tileSize, JSON.stringify(plain)].join('|');
   if (state.autoFor !== autoFor) {
     state.autoFor = autoFor;
     try {
-      state.auto = core.readSource(state.img, { tileSize: state.tileSize, swap: state.swap });
+      state.auto = core.readSource(state.img, { tileSize: state.tileSize, swap: state.swap, plain });
       state.autoError = null;
     } catch (err) {
       state.auto = null;
@@ -189,11 +195,17 @@ function analyse() {
     readPicks();
   } else {
     try {
-      state.source = core.readSource(state.img, { read: state.read, tileSize: state.tileSize, swap: state.swap });
+      state.source = core.readSource(state.img, { read: state.read, tileSize: state.tileSize, swap: state.swap, plain });
     } catch (err) {
       state.error = err.message;
     }
   }
+}
+
+/** The fill squares picked by hand, for the reader; null if none. */
+function plainPicks() {
+  const { fill, background, tileSize } = state.plain;
+  return fill || background ? { fill, background, tileSize } : null;
 }
 
 /** The pieces the outputs are built from: the source's, or blank placeholders. */
@@ -214,6 +226,80 @@ function guidePiecesFor(t) {
 /** The grid picks are made on: the tile size you set, or the one it found. */
 function pickTileSize() {
   return state.tileSize || state.auto?.tileSize || 16;
+}
+
+/** The grid squares are picked on: the reading's, or the pick board's. */
+function gridSize() {
+  return state.read === 'pick' ? pickTileSize() : state.source?.tileSize || pickTileSize();
+}
+
+/** True while a click on your image picks a square. */
+function choosingTile() {
+  return !!state.plain.picking || state.read === 'pick';
+}
+
+// ---------------------------------------------------------------------------
+// Foreground and background fill squares
+
+const PLAIN_KIND = { fill: 'fill', background: core.EMPTY_KIND };
+
+function wirePlain() {
+  for (const row of document.querySelectorAll('.plain-row')) {
+    const role = row.dataset.role;
+    row.querySelector('[data-act="pick"]').addEventListener('click', () => {
+      state.plain.picking = state.plain.picking === role ? null : role;
+      update();
+    });
+    row.querySelector('[data-act="auto"]').addEventListener('click', () => {
+      state.plain[role] = null;
+      state.plain.picking = null;
+      analyse();
+      update();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !state.plain.picking) return;
+    state.plain.picking = null;
+    update();
+  });
+}
+
+/** What each fill is and where it came from, with its picture. */
+function renderPlain() {
+  const src = state.source;
+  $('#plain').hidden = !src;
+  if (!src) return;
+  const t = src.tileSize;
+  for (const row of document.querySelectorAll('.plain-row')) {
+    const role = row.dataset.role;
+    const kind = PLAIN_KIND[role];
+    const picking = state.plain.picking === role;
+    const tile = core.createImage(t, t);
+    core.drawTile(tile, src.pieces, [0, 1, 2, 3].map((q) => ({ pos: q, kind })), 0, 0, t);
+    const canvas = row.querySelector('canvas');
+    canvas.width = canvas.height = t;
+    const zoom = Math.max(1, Math.round(40 / t));
+    canvas.style.width = canvas.style.height = t * zoom + 'px';
+    canvas.getContext('2d').putImageData(new ImageData(tile.data, t, t), 0, 0);
+    const how = row.querySelector('.plain-how');
+    how.classList.toggle('picking', picking);
+    how.textContent = picking ? 'click a square in your image (Esc to cancel).' : plainHow(src.pieces, kind, tile);
+    const pick = row.querySelector('[data-act="pick"]');
+    pick.textContent = picking ? 'Cancel' : 'Pick a square';
+    row.querySelector('[data-act="auto"]').disabled = !state.plain[role];
+  }
+}
+
+function plainHow(pieces, kind, tile) {
+  const pieceList = [0, 1, 2, 3].map((pos) => pieces.get(pos, kind)).filter(Boolean);
+  const found = pieceList.find((p) => p.how === 'found' && p.from && p.from.x !== undefined);
+  const visible = tile.data.some((v, i) => i % 4 === 3 && v >= 128);
+  if (found && found.from.picked) return `you picked tile (${found.from.x}, ${found.from.y}).`;
+  if (!visible) return kind === core.EMPTY_KIND ? 'see-through.' : 'none yet.';
+  if (found) return `found in tile (${found.from.x}, ${found.from.y}).`;
+  const flat = pieceList.find((p) => p.how === 'flat');
+  if (flat) return `none in your image, so a flat ${hex(flat.colour)}.`;
+  return 'made from your other tiles.';
 }
 
 function resetPicks() {
@@ -237,7 +323,7 @@ function readPicks() {
   const picks = [...p.picks[p.family]].map(([key, at]) => ({ key, ...at }));
   if (!picks.length) return;
   try {
-    state.source = core.readPicked(state.img, { family: p.family, tileSize: t, picks });
+    state.source = core.readPicked(state.img, { family: p.family, tileSize: t, picks, plain: plainPicks() });
   } catch (err) {
     state.error = err.message;
   }
@@ -283,23 +369,31 @@ function wirePicking() {
   });
   const view = $('#source-view');
   const tileAt = (e) => {
-    const t = pickTileSize();
+    const t = gridSize();
     const size = t * state.sourceScale;
     const x = Math.floor(e.offsetX / size), y = Math.floor(e.offsetY / size);
     return x >= 0 && y >= 0 && x < Math.floor(state.img.width / t) && y < Math.floor(state.img.height / t) ? { x, y } : null;
   };
   const same = (a, b) => (a && b ? a.x === b.x && a.y === b.y : a === b);
   view.addEventListener('click', (e) => {
-    if (state.read !== 'pick' || !state.img || p.selected === null) return;
+    if (!state.img || !choosingTile()) return;
     const at = tileAt(e);
     if (!at) return;
-    p.picks[p.family].set(p.selected, at);
-    p.selected = nextSlot();
+    const plain = state.plain;
+    if (plain.picking) {
+      plain[plain.picking] = at;
+      plain.tileSize = gridSize();
+      plain.picking = null;
+    } else {
+      if (p.selected === null) return;
+      p.picks[p.family].set(p.selected, at);
+      p.selected = nextSlot();
+    }
     analyse();
     update();
   });
   view.addEventListener('pointermove', (e) => {
-    if (state.read !== 'pick' || !state.img) return;
+    if (!state.img || !choosingTile()) return;
     const at = tileAt(e);
     if (same(at, p.hover)) return;
     p.hover = at;
@@ -377,6 +471,7 @@ function update() {
   renderSource();
   renderStatus();
   renderPick();
+  renderPlain();
   renderPieces();
   for (const button of document.querySelectorAll('.seg button[data-show]')) button.setAttribute('aria-pressed', String(button.dataset.show === state.show));
   renderCards();
@@ -394,7 +489,7 @@ function renderSource() {
   const box = $('#drop').clientWidth - 36;
   const src = state.source;
   const picking = state.read === 'pick';
-  canvas.classList.toggle('picking', picking);
+  canvas.classList.toggle('picking', choosingTile());
   state.sourceScale = paint(canvas, state.img, {
     maxWidth: Math.max(120, box),
     maxHeight: 460,
@@ -402,8 +497,42 @@ function renderSource() {
     overlay: (ctx, s) => {
       if (src) drawSourceMarks(ctx, s, src);
       if (picking) drawPickMarks(ctx, s);
+      drawPlainMarks(ctx, s);
+      if (choosingTile()) drawHover(ctx, s);
     },
   });
+}
+
+/** Label the fill squares picked by hand: F for the foreground, B for the background. */
+function drawPlainMarks(ctx, s) {
+  const plain = plainPicks();
+  if (!plain || !state.source || plain.tileSize !== state.source.tileSize) return;
+  const t = plain.tileSize * s;
+  const size = Math.max(10, Math.round(t * 0.28));
+  ctx.font = `700 ${size}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const [role, letter] of [['fill', 'F'], ['background', 'B']]) {
+    const at = plain[role];
+    if (!at) continue;
+    const x = at.x * t + 2, y = at.y * t + 2;
+    ctx.fillStyle = 'rgba(20, 24, 30, 0.85)';
+    ctx.fillRect(x, y, size + 4, size + 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(letter, x + (size + 4) / 2, y + (size + 4) / 2 + 1);
+  }
+}
+
+function drawHover(ctx, s) {
+  const at = state.pick.hover;
+  if (!at) return;
+  const t = gridSize() * s;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.strokeRect(at.x * t + 1.5, at.y * t + 1.5, t - 3, t - 3);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#ffffff';
+  ctx.strokeRect(at.x * t + 1.5, at.y * t + 1.5, t - 3, t - 3);
 }
 
 /** Outline the picked tiles, the selected slot's boldest, and the tile under the pointer. */
@@ -418,14 +547,6 @@ function drawPickMarks(ctx, s) {
     ctx.strokeRect(at.x * t + 2, at.y * t + 2, t - 4, t - 4);
   }
   ctx.setLineDash([]);
-  if (p.hover) {
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
-    ctx.strokeRect(p.hover.x * t + 1.5, p.hover.y * t + 1.5, t - 3, t - 3);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = '#ffffff';
-    ctx.strokeRect(p.hover.x * t + 1.5, p.hover.y * t + 1.5, t - 3, t - 3);
-  }
 }
 
 function renderPick() {
@@ -544,10 +665,10 @@ function renderStatus() {
     if (src.split) box.append(splitLine(src.split));
   }
   if (s.flatBackground) {
-    box.append(statusLine(`There's no plain background tile in your image, so away from the terrain the background is flat ${hex(s.flatBackground)}.`, 'warn'));
+    box.append(statusLine(`There's no plain background tile in your image, so the background fill is flat ${hex(s.flatBackground)}. To use a square from your image instead, pick one under Plain squares.`, 'warn'));
   }
   if (s.flatFill) {
-    box.append(statusLine(`There's no fill tile in your image, so the middle of the terrain is flat ${hex(s.flatFill)}. Add a solid tile somewhere in the image to use real texture there.`, 'warn'));
+    box.append(statusLine(`There's no plain tile of your terrain in your image, so the foreground fill (the middle of the terrain) is flat ${hex(s.flatFill)}. To use real texture there, pick a square under Plain squares, or add a solid tile to your image.`, 'warn'));
   }
   const standIns = s.terrain.madeUp - (s.flatFill ? 4 : 0);
   if (standIns > 0 && src.read !== 'picked') box.append(statusLine(`${standIns} terrain pieces weren't in your image and use the fill instead. Open "The pieces it found" to see which.`, 'warn'));

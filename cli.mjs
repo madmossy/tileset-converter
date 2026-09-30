@@ -20,11 +20,19 @@ const USAGE = `Usage: node cli.mjs <image.png> [options]
                     swap which colour is the terrain and which the background
   --keep-border     for an image with no transparency, keep its border colour
                     rather than treating it as transparent
+  --fill X,Y        take the foreground fill (the plain middle of the terrain)
+                    from the tile at column X, row Y, counting from 0
+  --background X,Y  take the background fill from the tile at column X, row Y
   --blank           write blank templates instead of converting an image
                     (needs --tile; no image argument)`;
 
 function parseArgs(argv) {
-  const args = { read: 'auto', tile: 0, out: 'out', only: null, godotDir: 'res://tiles/', terrain: 'Terrain', blank: false, swap: false, keepBorder: false, input: null };
+  const args = { read: 'auto', tile: 0, out: 'out', only: null, godotDir: 'res://tiles/', terrain: 'Terrain', blank: false, swap: false, keepBorder: false, fill: null, background: null, input: null };
+  const tileAt = (flag, value) => {
+    const m = /^(\d+),(\d+)$/.exec(value);
+    if (!m) throw new Error(`${flag} takes a tile's column and row, like 2,4.`);
+    return { x: Number(m[1]), y: Number(m[2]) };
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -40,6 +48,8 @@ function parseArgs(argv) {
     else if (a === '--blank') args.blank = true;
     else if (a === '--swap') args.swap = true;
     else if (a === '--keep-border') args.keepBorder = true;
+    else if (a === '--fill') args.fill = tileAt(a, next());
+    else if (a === '--background') args.background = tileAt(a, next());
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a.startsWith('--')) throw new Error(`Unknown option ${a}.`);
     else args.input = a;
@@ -65,7 +75,8 @@ function main() {
       const border = core.borderColour(img);
       if (core.isBackdrop(img, border)) img = core.keyOut(img, border);
     }
-    const source = core.readSource(img, { read: args.read, tileSize: args.tile, swap: args.swap });
+    const plain = args.fill || args.background ? { fill: args.fill, background: args.background } : null;
+    const source = core.readSource(img, { read: args.read, tileSize: args.tile, swap: args.swap, plain });
     ({ pieces, tileSize } = source);
     name = basename(args.input, extname(args.input));
     const s = core.summarise(pieces);

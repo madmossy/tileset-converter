@@ -310,6 +310,36 @@ test('the ring’s hole shows the background, and reading a ring sheet picks it 
   assert.equal(see.data[((t + 8) * see.width + t + 8) * 4 + 3], 0);
 });
 
+test('the foreground and background fills can be picked by hand', () => {
+  const t = 16;
+  const img = waterExample(t); // no plain sand tile, so the foreground fill is made up
+  const quarter = (x, y, q) => {
+    const out = core.createImage(t / 2, t / 2);
+    core.blitRegion(img, x * t + (q & 1) * (t / 2), y * t + (q >> 1) * (t / 2), t / 2, t / 2, out, 0, 0);
+    return out.data;
+  };
+  assert.deepEqual(core.summarise(core.readSource(img).pieces).flatFill, [...SAND, 255]);
+  // Pick the all-water middle tile as the foreground fill, and the see-through
+  // corner as the background fill: odd choices, but they're taken as picked.
+  const plain = { fill: { x: 1, y: 1 }, background: { x: 2, y: 4 } };
+  for (const source of [core.readSource(img, { plain }), core.readPicked(img, { family: 'dual', tileSize: t, picks: [{ key: 7, x: 0, y: 0 }], plain })]) {
+    for (let q = 0; q < 4; q++) {
+      const fill = source.pieces.get(q, 'fill');
+      assert.equal(fill.how, 'found');
+      assert.deepEqual(fill.from, { x: 1, y: 1, q, picked: true });
+      assert.deepEqual(fill.pixels, quarter(1, 1, q));
+      assert.ok(source.pieces.get(q, core.EMPTY_KIND).pixels.every((v, i) => i % 4 !== 3 || v === 0), 'a see-through background');
+    }
+    const s = core.summarise(source.pieces);
+    assert.equal(s.flatFill, null);
+    assert.equal(s.flatBackground, null);
+  }
+  // Picks made on another grid, or off this one, are ignored.
+  for (const other of [{ fill: { x: 1, y: 1 }, tileSize: 32 }, { fill: { x: 9, y: 9 } }]) {
+    assert.deepEqual(core.summarise(core.readSource(img, { plain: other }).pieces).flatFill, [...SAND, 255]);
+  }
+});
+
 test('painting a map on a solid background shows the background away from the terrain', () => {
   const t = 16;
   const { pieces } = core.readSource(waterExample(t));

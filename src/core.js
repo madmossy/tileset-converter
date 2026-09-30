@@ -764,13 +764,34 @@ function extract(img, t, mode, { layout = null, split = null, fillMap = img } = 
   return { pieces, tiles, placements };
 }
 
+/** Take the foreground fill (the plain middle of the terrain) and the
+ *  background fill from squares picked by hand, in place of whatever the
+ *  reading found or made up. `plain` is { fill, background, tileSize }: fill
+ *  and background are each null or the {x, y} of a tile, whose four quarters
+ *  become that piece at the four corners. Picks made on a grid of another
+ *  tile size, or off the grid, are ignored. */
+function takePlain(img, t, pieces, plain) {
+  if (!plain || (plain.tileSize && plain.tileSize !== t)) return;
+  const h = t >> 1;
+  const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
+  for (const [role, kind] of [['fill', 'fill'], ['background', EMPTY_KIND]]) {
+    const at = plain[role];
+    if (!at || at.x < 0 || at.y < 0 || at.x >= cols || at.y >= rows) continue;
+    for (let q = 0; q < 4; q++) {
+      const pixels = crop(img, at.x * t + (q & 1) * h, at.y * t + (q >> 1) * h, h, h);
+      pieces.set(q, kind, { pixels, how: 'found', from: { x: at.x, y: at.y, q, picked: true } });
+    }
+  }
+}
+
 /** Read a source image into pieces.
  *  `read` is 'auto', 'dual', 'terrain' or a layout id; `tileSize` 0 = work it out.
  *  For art on a solid background, `swap` swaps which colour is the terrain.
+ *  `plain` picks the fill and background squares by hand (see takePlain).
  *  Returns { read, tileSize, pieces, tiles, cols, rows, split } or throws a
  *  readable Error. `split` is null, or the { terrain, background } colours
  *  when filled cells were told apart by colour. */
-export function readSource(img, { read = 'auto', tileSize = 0, swap = false } = {}) {
+export function readSource(img, { read = 'auto', tileSize = 0, swap = false, plain = null } = {}) {
   let t = tileSize;
   let mode = read;
   let split = null;
@@ -790,6 +811,7 @@ export function readSource(img, { read = 'auto', tileSize = 0, swap = false } = 
   }
   if (t < 2 || t % 2) throw new Error(`The tile size has to be an even number of pixels (got ${t}), because every tile is cut into quarters.`);
   const { pieces, tiles } = extract(img, t, mode, { layout, split, fillMap: split ? filledMap(img, split) : img });
+  takePlain(img, t, pieces, plain);
   completePieces(pieces);
   return { read: mode, tileSize: t, pieces, tiles, cols: Math.floor(img.width / t), rows: Math.floor(img.height / t), split };
 }
@@ -836,13 +858,15 @@ export const PICK_BOARDS = {
 /** Read pieces from tiles picked by hand. `picks` is [{ key, x, y }]: a board
  *  slot's key, and the grid position of the image tile that fills it. Pieces
  *  the picks don't show are made from the ones they do, as for any source.
- *  Returns the same shape as readSource, with read 'picked'. */
-export function readPicked(img, { family, tileSize, picks }) {
+ *  `plain` is as for readSource. Returns the same shape as readSource, with
+ *  read 'picked'. */
+export function readPicked(img, { family, tileSize, picks, plain = null }) {
   const t = tileSize;
   if (!t || t < 2 || t % 2) throw new Error(`The tile size has to be an even number of pixels (got ${t}), because every tile is cut into quarters.`);
   const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
   const slots = picks.filter((p) => p.x < cols && p.y < rows);
   const { pieces, tiles } = extract(img, t, null, { layout: { family, slots } });
+  takePlain(img, t, pieces, plain);
   completePieces(pieces);
   return { read: 'picked', family, tileSize: t, pieces, tiles, cols, rows, split: null };
 }
