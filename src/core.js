@@ -184,9 +184,13 @@ const MINIMAL = [
   [N | NE | E, N | W | NW],
 ];
 
+/** Key of a blob-layout slot that holds no terrain, only the background: the
+ *  hole in the ring. Blank for see-through art. */
+export const BACKGROUND = 'background';
+
 function ringRows() {
   const inRing = (x, y) => x >= 0 && y >= 0 && x < 3 && y < 3 && !(x === 1 && y === 1);
-  const rows = [0, 1, 2].map((y) => [0, 1, 2].map((x) => (inRing(x, y) ? maskAt(inRing, x, y) : null)));
+  const rows = [0, 1, 2].map((y) => [0, 1, 2].map((x) => (inRing(x, y) ? maskAt(inRing, x, y) : BACKGROUND)));
   return [...rows, [null, null, null], [null, 255, null]];
 }
 
@@ -270,7 +274,7 @@ export const LAYOUTS = [
     paintable: false,
     name: '3×3 ring + fill · source block',
     file: 'ring_3x3',
-    blurb: 'A 3×3 block with a hole in the middle, and a fill tile below it. The ring holds every edge and outer corner and the hole every inner corner, so it’s another quick sheet to draw by hand.',
+    blurb: 'A 3×3 block with a hole in the middle, and a fill tile below it. The ring holds every edge and outer corner, and around the hole every inner corner, so it’s another quick sheet to draw by hand. If your terrain sits on a solid background, the hole shows it.',
     cols: 3,
     rows: 5,
     slots: fromRows(ringRows()),
@@ -282,6 +286,7 @@ export function layoutById(id) {
 }
 
 export function recipeFor(layout, key) {
+  if (key === BACKGROUND) return [0, 1, 2, 3].map((q) => ({ pos: q, kind: EMPTY_KIND }));
   return layout.family === 'dual' ? dualRecipe(key) : blobRecipe(key);
 }
 
@@ -294,6 +299,7 @@ export function slotIndex(layout) {
 
 /** A plain-English description of a slot, for hover text. */
 export function describeSlot(layout, key) {
+  if (key === BACKGROUND) return 'No terrain: the background';
   if (layout.family === 'dual') {
     const names = POSITION_NAMES.filter((_, i) => (key >> i) & 1);
     if (!names.length) return 'No filled corners: the empty tile';

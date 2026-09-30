@@ -290,6 +290,26 @@ test('blob tiles draw overhanging art inside the cell, pulled in as far as it ov
   assert.equal(core.blobPieces(guide), guide);
 });
 
+test('the ring’s hole shows the background, and reading a ring sheet picks it up', () => {
+  const t = 16;
+  const layout = core.layoutById('ring');
+  const hole = layout.slots.find((slot) => slot.key === core.BACKGROUND);
+  assert.deepEqual([hole.x, hole.y], [1, 1]);
+  const water = core.readSource(waterExample(t)).pieces;
+  const sheet = core.composeSheet(water, layout, t);
+  for (let y = 0; y < t; y++) {
+    for (let x = 0; x < t; x++) {
+      const i = ((t + y) * sheet.width + t + x) * 4;
+      assert.deepEqual([...sheet.data.subarray(i, i + 4)], [...WATER, 255], `hole pixel ${x},${y}`);
+    }
+  }
+  const back = core.readSource(sheet, { read: 'ring' });
+  assert.equal(back.pieces.get(0, core.EMPTY_KIND).how, 'found');
+  // See-through art leaves the hole blank, as before.
+  const see = core.composeSheet(core.readSource(example()).pieces, layout, t);
+  assert.equal(see.data[((t + 8) * see.width + t + 8) * 4 + 3], 0);
+});
+
 test('painting a map on a solid background shows the background away from the terrain', () => {
   const t = 16;
   const { pieces } = core.readSource(waterExample(t));
@@ -330,6 +350,12 @@ test('each pick board holds distinct slots, and its two minimum slots show every
   assert.equal(core.PICK_BOARDS.blob.slots.length, 13);
 });
 
+function terrainOnly(pieces) {
+  const out = new core.Pieces(pieces.half);
+  for (const kind of core.FILLED_KINDS) for (let pos = 0; pos < 4; pos++) out.set(pos, kind, pieces.get(pos, kind));
+  return out;
+}
+
 /** A sheet with each of a board's tiles in a scrambled spot, and the picks
  *  that point at them. */
 function scrambled(pieces, board, t) {
@@ -353,9 +379,10 @@ test('tiles picked by hand in any arrangement read back to the pieces they came 
     assert.equal(source.tiles.length, board.slots.length);
     assert.deepEqual(core.missingKinds(source.pieces), []);
     // Dual tiles carry every piece; blob tiles only the terrain's own.
+    const expected = family === 'dual' ? pieces : terrainOnly(pieces);
     const layouts = core.LAYOUTS.filter((l) => family === 'dual' || l.family === 'blob');
     for (const layout of layouts) {
-      assert.deepEqual(core.composeSheet(source.pieces, layout, t).data, core.composeSheet(pieces, layout, t).data, `${family} -> ${layout.id}`);
+      assert.deepEqual(core.composeSheet(source.pieces, layout, t).data, core.composeSheet(expected, layout, t).data, `${family} -> ${layout.id}`);
     }
   }
 });

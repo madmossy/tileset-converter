@@ -33,7 +33,7 @@ Switch to **Blank templates** for empty versions of every layout to draw over.
 | Blob 47 · sorted 8-column | 47 | Match Corners and Sides | Sorted by neighbour mask (N = 1, NE = 2, E = 4 … NW = 128), 8 to a row. Slot *i* holds the *i*-th mask. |
 | Match Sides · 4×4 | 16 | Match Sides | Sides only, no inner corners. *n* = top + 2·right + 4·bottom + 8·left. |
 | Minimal 6-tile | 6 | (source format) | A lone tile, four inner corners and a 2×2 block, like RPG Maker's A2. |
-| 3×3 ring + fill | 9 | (source format) | A 3×3 block with a hole, plus a fill tile. |
+| 3×3 ring + fill | 9 | (source format) | A 3×3 block with a hole, plus a fill tile. On a solid background, the hole shows the background. |
 
 ### Dual grid in Godot
 
