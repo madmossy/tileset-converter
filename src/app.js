@@ -683,7 +683,7 @@ function renderCards() {
     entry.scale = paint(entry.canvas, sheet, { maxWidth: width, maxHeight: 420, maxScale: 8, grid: t });
     const trims = overhang && entry.layout.family === 'blob';
     entry.note.hidden = !trims;
-    if (trims) entry.note.textContent = 'Your art spills past the edge of each cell. Blob tiles can only draw inside their own cell, so that part is cut off here. The dual-grid layouts keep it.';
+    if (trims) entry.note.textContent = 'Your art spills past the edge of each cell. Blob tiles can only draw inside their own cell, so here the terrain is drawn a little smaller, with its whole edge inside the tile. The dual-grid layouts draw it exactly as it is.';
   }
 }
 

@@ -222,7 +222,7 @@ export const LAYOUTS = [
     paintable: true,
     name: 'Blob 47 · Godot 12×4 template',
     file: 'blob_12x4',
-    blurb: 'Godot’s classic 3×3-minimal template, for a Match Corners and Sides terrain. Blob tiles sit on the grid, so art that overhangs a cell’s edge gets trimmed.',
+    blurb: 'Godot’s classic 3×3-minimal template, for a Match Corners and Sides terrain. Blob tiles sit on the grid, so art that overhangs a cell’s edge is drawn inside it instead.',
     cols: 12,
     rows: 4,
     slots: fromRows(BLOB_GODOT),
@@ -994,7 +994,98 @@ export function drawTile(out, pieces, recipe, x0, y0, t) {
 /** Build a whole sheet in `layout` from a set of pieces. */
 export function composeSheet(pieces, layout, t) {
   const out = createImage(layout.cols * t, layout.rows * t);
-  for (const slot of layout.slots) drawTile(out, pieces, recipeFor(layout, slot.key), slot.x * t, slot.y * t, t);
+  const use = layout.family === 'blob' ? blobPieces(pieces) : pieces;
+  for (const slot of layout.slots) drawTile(out, use, recipeFor(layout, slot.key), slot.x * t, slot.y * t, t);
+  return out;
+}
+
+/** Per kind of terrain piece: whether its [vertical, horizontal, diagonal]
+ *  neighbours are filled, taking the diagonal as empty where it can't matter. */
+const KIND_NEIGHBOURS = { fill: [1, 1, 1], outer: [0, 0, 0], hedge: [0, 1, 0], vedge: [1, 0, 0], inner: [1, 1, 0] };
+
+/** A test for whether a pixel of an empty cell's piece is art rather than
+ *  plain background: anything visible on see-through art; on a solid
+ *  background, anything clearly off the background piece's colour. */
+function artTest(pieces) {
+  const base = [0, 1, 2, 3].map((pos) => pieces.get(pos, EMPTY_KIND)).find((p) => p && isSolid(p.pixels));
+  if (!base) return (px, i) => px[i + 3] >= 128;
+  const n = base.pixels.length / 4;
+  const mean = [0, 1, 2].map((k) => base.pixels.reduce((sum, v, i) => (i % 4 === k ? sum + v : sum), 0) / n);
+  let spread = 0;
+  for (let i = 0; i < base.pixels.length; i += 4) spread += distance2([base.pixels[i], base.pixels[i + 1], base.pixels[i + 2]], mean);
+  const limit = Math.max(24, 3 * Math.sqrt(spread / n)) ** 2;
+  return (px, i) => px[i + 3] >= 128 && distance2([px[i], px[i + 1], px[i + 2]], mean) > limit;
+}
+
+/** How far the art reaches past the terrain's edge into the empty cell beyond
+ *  it, on each side: { top, bottom, left, right } in pixels, read from the
+ *  pieces of empty cells beside a straight edge. */
+export function overhangDepths(pieces) {
+  const h = pieces.half;
+  const isArt = artTest(pieces);
+  // Rows (or columns) of art in a piece, counted in from the edge that
+  // touches the terrain.
+  const depth = (pos, kind, side) => {
+    const piece = pieces.get(pos, kind);
+    if (!piece) return 0;
+    let d = 0;
+    for (let k = 0; k < h; k++) {
+      for (let j = 0; j < h; j++) {
+        const [x, y] = side === 'top' ? [j, h - 1 - k] : side === 'bottom' ? [j, k] : side === 'left' ? [h - 1 - k, j] : [k, j];
+        if (isArt(piece.pixels, (y * h + x) * 4)) d = k + 1;
+      }
+    }
+    return d;
+  };
+  // Above the terrain, its edge touches the bottom quarters of the empty cell; and so on.
+  return {
+    top: Math.max(depth(2, 'b101', 'top'), depth(3, 'b101', 'top')),
+    bottom: Math.max(depth(0, 'b101', 'bottom'), depth(1, 'b101', 'bottom')),
+    left: Math.max(depth(1, 'b011', 'left'), depth(3, 'b011', 'left')),
+    right: Math.max(depth(0, 'b011', 'right'), depth(2, 'b011', 'right')),
+  };
+}
+
+/** The terrain pieces for blob tiles. A blob tile can only draw inside its own
+ *  cell, so art that overhangs into an empty neighbour (an outline, a
+ *  shoreline, a cliff face) would be cut off. Instead, each piece on an open
+ *  side is taken from the dual-grid picture around its corner, shifted out
+ *  past the terrain's edge by as far as the art overhangs on that side: the
+ *  terrain comes out smaller, with its whole edge inside the cell. At most
+ *  half a tile less a pixel, so every piece keeps a strip of its own cell. */
+export function blobPieces(pieces) {
+  const h = pieces.half, t = h * 2;
+  const reach = overhangDepths(pieces);
+  if (!reach.top && !reach.bottom && !reach.left && !reach.right) return pieces;
+  const out = new Pieces(h);
+  for (const [key, piece] of pieces.map) out.map.set(key, piece);
+  const background = [0, 1, 2, 3].map((q) => ({ pos: q, kind: EMPTY_KIND }));
+  const around = createImage(t, t);
+  for (let q = 0; q < 4; q++) {
+    const right = q & 1, bottom = q >> 1;
+    const shiftY = Math.min(bottom ? reach.bottom : reach.top, h - 1);
+    const shiftX = Math.min(right ? reach.right : reach.left, h - 1);
+    for (const kind of FILLED_KINDS) {
+      const piece = pieces.get(q, kind);
+      if (!piece) continue;
+      const [v, hz, d] = KIND_NEIGHBOURS[kind];
+      const open = kind === 'inner';
+      const dy = !v || open ? shiftY : 0;
+      const dx = !hz || open ? shiftX : 0;
+      if (!dx && !dy) continue;
+      // The dual tile centred on this quarter's corner: the cell itself sits
+      // opposite that corner, its neighbours beside and across it.
+      const c = 3 - q;
+      const corners = (1 << c) | (v << (c ^ 2)) | (hz << (c ^ 1)) | (d << q);
+      around.data.fill(0);
+      drawTile(around, pieces, background, 0, 0, t);
+      drawTile(around, pieces, dualRecipe(corners), 0, 0, t);
+      // The cell's own quarter of that tile, moved towards the corner.
+      const x = (c & 1) * h + (right ? dx : -dx);
+      const y = (c >> 1) * h + (bottom ? dy : -dy);
+      out.set(q, kind, { ...piece, pixels: crop(around, x, y, h, h) });
+    }
+  }
   return out;
 }
 
@@ -1081,6 +1172,7 @@ export function renderMap(world, t, layout, sheet, pieces) {
     return out;
   }
   const background = [0, 1, 2, 3].map((q) => ({ pos: q, kind: EMPTY_KIND }));
+  const blob = blobPieces(pieces);
   for (let y = 0; y < world.h; y++) {
     for (let x = 0; x < world.w; x++) {
       if (!on(x, y)) {
@@ -1091,7 +1183,7 @@ export function renderMap(world, t, layout, sheet, pieces) {
       const key = layout.godot === 'sides' ? sidesMask(sidesOf(mask)) : mask;
       const slot = layout.paintable ? index.get(key) : null;
       if (slot) blitRegion(sheet, slot.x * t, slot.y * t, t, t, out, x * t, y * t);
-      else drawTile(out, pieces, blobRecipe(mask), x * t, y * t, t);
+      else drawTile(out, blob, blobRecipe(mask), x * t, y * t, t);
     }
   }
   return out;

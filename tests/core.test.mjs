@@ -261,6 +261,35 @@ test('converting tiles on a solid background keeps the tiles they came from', ()
   for (const [dx, dy] of [[0, 0], [t - 1, 0], [t >> 1, t >> 1], [0, t - 1]]) assert.deepEqual(px(empty.x * t + dx, empty.y * t + dy), WATER);
 });
 
+test('blob tiles draw overhanging art inside the cell, pulled in as far as it overhangs', () => {
+  const t = 16;
+  const see = core.readSource(example()).pieces;
+  assert.deepEqual(core.overhangDepths(see), { top: 1, bottom: 1, left: 1, right: 1 }, 'the example’s one-pixel outline');
+  const water = core.readSource(waterExample(t)).pieces;
+  assert.deepEqual(core.overhangDepths(water), { top: 6, bottom: 6, left: 6, right: 6 }, 'the shoreline');
+  const layout = core.layoutById('blob-sorted');
+  const sheet = core.composeSheet(water, layout, t);
+  const px = (x, y) => [...sheet.data.subarray((y * sheet.width + x) * 4, (y * sheet.width + x) * 4 + 3)];
+  const SAND_COLOURS = ['186,138,84', '214,170,110', '160,116,68'];
+  const isSand = (rgb) => SAND_COLOURS.includes(rgb.join());
+  for (const slot of layout.slots) {
+    const x0 = slot.x * t, y0 = slot.y * t;
+    assert.ok(isSand(px(x0 + t / 2, y0 + t / 2)), `mask ${slot.key}: sand in the middle`);
+    // Each open side shows shoreline or water along its edge, not sand.
+    const sides = { top: [core.N, (i) => [i, 0]], bottom: [core.S, (i) => [i, t - 1]], left: [core.W, (i) => [0, i]], right: [core.E, (i) => [t - 1, i]] };
+    for (const [side, [bit, at]] of Object.entries(sides)) {
+      if (slot.key & bit) continue;
+      for (let i = 0; i < t; i++) {
+        const [x, y] = at(i);
+        assert.ok(!isSand(px(x0 + x, y0 + y)), `mask ${slot.key}: sand at the ${side} edge`);
+      }
+    }
+  }
+  // Art with nothing spilling over is left alone.
+  const guide = core.guidePieces(t);
+  assert.equal(core.blobPieces(guide), guide);
+});
+
 test('painting a map on a solid background shows the background away from the terrain', () => {
   const t = 16;
   const { pieces } = core.readSource(waterExample(t));

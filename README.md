@@ -39,9 +39,9 @@ Switch to **Blank templates** for empty versions of every layout to draw over.
 
 For true dual-grid painting (paint a cell and exactly that cell fills), use the **standard 4×4** sheet with a dual-grid script: a second TileMapLayer offset by half a tile, whose tiles are chosen from the four cells around each corner. The `.tres` also works with Godot's built-in **Match Corners** terrain, but that terrain lives on the corners *between* painted cells, so the terrain you see is the painted area shrunk by half a tile.
 
-### Blob tiles can't overhang
+### Blob tiles draw the edge inside the cell
 
-A blob tile sits on its own cell, so it can't draw anything past that cell's edge. If your art spills over the edge (like the example's outline), the blob layouts cut that part off, and the page warns you. The dual-grid layouts keep it.
+A blob tile sits on its own cell, so it can't draw anything past that cell's edge. If your art spills over the edge (like the example's outline, or a shoreline running out into water), the blob layouts draw the terrain smaller instead, pulled in on each open side by as far as the art spills over on that side, so the whole edge fits inside the tile. The page says when it has done this. The dual-grid layouts draw the art exactly as it is.
 
 ## How it works
 
