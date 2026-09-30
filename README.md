@@ -26,7 +26,7 @@ Switch to **Blank templates** for empty versions of every layout to draw over.
 | Dual grid · standard 4×4 | 16 | Match Corners | The layout from jess::codes' dual-grid tutorial and its Godot ports. Touching tiles share corners, so the sheet reads as one picture. |
 | Dual grid · 4×4 by number | 16 | Match Corners | Tile *n* at column *n* % 4, row *n* / 4, where *n* = TL + 2·TR + 4·BL + 8·BR. |
 | Blob 47 · Godot 12×4 template | 47 | Match Corners and Sides | Godot's classic 3×3-minimal template. |
-| Blob 47 · Emberkin 8-column | 47 | Match Corners and Sides | Sorted by neighbour mask, 8 to a row (Emberkin's `tools/Blob47.gd`). |
+| Blob 47 · sorted 8-column | 47 | Match Corners and Sides | Sorted by neighbour mask (N = 1, NE = 2, E = 4 … NW = 128), 8 to a row. Slot *i* holds the *i*-th mask. |
 | Match Sides · 4×4 | 16 | Match Sides | Sides only, no inner corners. *n* = top + 2·right + 4·bottom + 8·left. |
 | Minimal 6-tile | 6 | (source format) | A lone tile, four inner corners and a 2×2 block, like RPG Maker's A2. |
 | 3×3 ring + fill | 9 | (source format) | A 3×3 block with a hole, plus a fill tile. |

@@ -83,7 +83,7 @@ export class Pieces {
 // ---------------------------------------------------------------------------
 // Recipes: which piece goes in each quarter of a tile
 
-/** Blob neighbour bits (the same numbering as Emberkin's tools/Blob47.gd). */
+/** Blob neighbour bits, clockwise from the top. */
 export const N = 1, NE = 2, E = 4, SE = 8, S = 16, SW = 32, W = 64, NW = 128;
 const DIRECTIONS = [['N', N], ['NE', NE], ['E', E], ['SE', SE], ['S', S], ['SW', SW], ['W', W], ['NW', NW]];
 const OFFSETS = [[N, 0, -1], [NE, 1, -1], [E, 1, 0], [SE, 1, 1], [S, 0, 1], [SW, -1, 1], [W, -1, 0], [NW, -1, -1]];
@@ -227,13 +227,13 @@ export const LAYOUTS = [
     slots: fromRows(BLOB_GODOT),
   },
   {
-    id: 'blob-emberkin',
+    id: 'blob-sorted',
     family: 'blob',
     godot: 'corners-and-sides',
     paintable: true,
-    name: 'Blob 47 · Emberkin 8-column',
+    name: 'Blob 47 · sorted 8-column',
     file: 'blob_8col',
-    blurb: 'The same 47 tiles in Emberkin’s order (tools/Blob47.gd): sorted by neighbour mask, 8 to a row, slot (7,5) left empty.',
+    blurb: 'The same 47 tiles sorted by neighbour mask (N = 1, NE = 2, E = 4 … NW = 128), 8 to a row, with the last slot left empty. Easy to index from your own code: slot i holds the i-th mask.',
     cols: 8,
     rows: 6,
     slots: blobMasks().map((key, i) => ({ x: i % 8, y: i >> 3, key })),
@@ -267,9 +267,9 @@ export const LAYOUTS = [
     family: 'blob',
     godot: null,
     paintable: false,
-    name: '3×3 ring + fill · Emberkin source block',
+    name: '3×3 ring + fill · source block',
     file: 'ring_3x3',
-    blurb: 'A 3×3 block with a hole in the middle, and a fill tile below it: the source-block shape Emberkin’s Blob-47 generator reads.',
+    blurb: 'A 3×3 block with a hole in the middle, and a fill tile below it. The ring holds every edge and outer corner and the hole every inner corner, so it’s another quick sheet to draw by hand.',
     cols: 3,
     rows: 5,
     slots: fromRows(ringRows()),

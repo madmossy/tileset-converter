@@ -42,20 +42,23 @@ test('the standard dual sheet holds each corner set once, and touching tiles sha
 test('both blob-47 sheets hold the 47 neighbourhoods once each', () => {
   const all = core.blobMasks();
   assert.equal(all.length, 47);
-  for (const id of ['blob-godot', 'blob-emberkin']) {
+  for (const id of ['blob-godot', 'blob-sorted']) {
     const keys = core.layoutById(id).slots.map((s) => s.key);
     assert.equal(keys.length, 47, id);
     assert.deepEqual([...keys].sort((a, b) => a - b), all, id);
   }
 });
 
-test('the Emberkin sheet uses the same slots as tools/Blob47.gd', () => {
-  const layout = core.layoutById('blob-emberkin');
-  // Blob47.gd: slot i holds masks()[i], 8 per row. Spot-check its named tiles.
+test('the sorted sheet puts slot i at column i % 8, row i / 8, masks ascending', () => {
+  const layout = core.layoutById('blob-sorted');
+  layout.slots.forEach((s, i) => {
+    assert.deepEqual([s.x, s.y], [i % 8, i >> 3]);
+    if (i) assert.ok(s.key > layout.slots[i - 1].key, `slot ${i} is out of order`);
+  });
   const slotOf = (mask) => layout.slots.find((s) => s.key === mask);
   assert.deepEqual([slotOf(0).x, slotOf(0).y], [0, 0]);
   assert.deepEqual([slotOf(255).x, slotOf(255).y], [6, 5]);
-  assert.ok(!layout.slots.some((s) => s.x === 7 && s.y === 5), 'slot (7,5) is reserved');
+  assert.ok(!layout.slots.some((s) => s.x === 7 && s.y === 5), 'the last slot is left empty');
 });
 
 test('the Match Sides sheet has 16 tiles with no inner corners', () => {
@@ -195,7 +198,7 @@ test('painting a map gives the same picture whichever sheet of a family is used'
     return core.renderMap(world, t, layout, core.composeSheet(pieces, layout, t), pieces).data;
   };
   assert.deepEqual(paint('dual-binary'), paint('dual-standard'));
-  assert.deepEqual(paint('blob-emberkin'), paint('blob-godot'));
+  assert.deepEqual(paint('blob-sorted'), paint('blob-godot'));
   assert.deepEqual(paint('minimal'), paint('blob-godot'), 'non-autotile layouts draw straight from the pieces');
 });
 
