@@ -7,7 +7,7 @@ const HOW_TEXT = {
   found: (p) => (p.from && p.from.x !== undefined ? `Found in tile (${p.from.x}, ${p.from.y})` : 'Found'),
   mirrored: (p) => `Mirrored from the ${core.POSITION_NAMES[p.from.pos]} one`,
   copied: (p) => `Copied from the ${core.POSITION_NAMES[p.from.pos]} one`,
-  flat: () => 'No fill in your image: a flat colour',
+  flat: (p, kind) => (kind === core.EMPTY_KIND ? 'No plain background in your image: a flat colour' : 'No fill in your image: a flat colour'),
   'stand-in': () => 'Not in your image: using the fill instead',
   layered: (p) => `Not in your image: layered from ${p.from.kinds.map((k) => core.KIND_NAMES[k].toLowerCase()).join(' + ')}`,
 };
@@ -21,6 +21,7 @@ const state = {
   tileSize: 0,
   key: null,
   keyOn: true,
+  swap: false,
   source: null,
   error: null,
   show: 'tiles',
@@ -132,6 +133,9 @@ async function loadBlob(blob, name) {
     state.raw = { width: data.width, height: data.height, data: data.data };
     state.name = (name || 'tileset').replace(/\.[^.]+$/, '') || 'tileset';
     state.key = core.hasTransparency(state.raw) ? null : core.borderColour(state.raw);
+    state.keyOn = !state.key || core.isBackdrop(state.raw, state.key);
+    $('#key-on').checked = state.keyOn;
+    state.swap = false;
     state.show = 'tiles';
   } catch {
     state.raw = null;
@@ -149,7 +153,7 @@ function analyse() {
   if (!state.raw) return;
   state.img = state.key && state.keyOn ? core.keyOut(state.raw, state.key) : state.raw;
   try {
-    state.source = core.readSource(state.img, { read: state.read, tileSize: state.tileSize });
+    state.source = core.readSource(state.img, { read: state.read, tileSize: state.tileSize, swap: state.swap });
   } catch (err) {
     state.error = err.message;
   }
@@ -301,12 +305,35 @@ function renderStatus() {
   const how = src.read === 'dual' ? 'dual-grid tiles' : src.read === 'terrain' ? 'a drawing of terrain' : `a ${core.layoutById(src.read).name} sheet`;
   const s = core.summarise(src.pieces);
   box.append(statusLine(`Read as ${how}, with ${src.tileSize}px tiles${state.read === 'auto' ? ' (worked out automatically)' : ''}. Found ${s.terrain.found} of the ${s.terrain.total} terrain pieces and ${s.overhang.found} of the ${s.overhang.total} overhang pieces.`));
+  if (src.split) box.append(splitLine(src.split));
+  if (s.flatBackground) {
+    box.append(statusLine(`There's no plain background tile in your image, so away from the terrain the background is flat ${hex(s.flatBackground)}.`, 'warn'));
+  }
   if (s.flatFill) {
     box.append(statusLine(`There's no fill tile in your image, so the middle of the terrain is flat ${hex(s.flatFill)}. Add a solid tile somewhere in the image to use real texture there.`, 'warn'));
   }
   const standIns = s.terrain.madeUp - (s.flatFill ? 4 : 0);
   if (standIns > 0) box.append(statusLine(`${standIns} terrain pieces weren't in your image and use the fill instead. Open "The pieces it found" to see which.`, 'warn'));
   if (s.terrain.adapted > 0) box.append(statusLine(`${s.terrain.adapted} terrain pieces were mirrored from another corner. Check they still look right if your art has lighting from one side.`, 'warn'));
+}
+
+/** For art on a solid background: which colour was taken as the terrain, and
+ *  a button to swap it with the background. */
+function splitLine(split) {
+  const line = statusLine('');
+  const swatch = (rgb) => {
+    const span = document.createElement('span');
+    span.className = 'swatch';
+    span.style.background = hex(rgb.map(Math.round));
+    return span;
+  };
+  const swap = document.createElement('button');
+  swap.type = 'button';
+  swap.className = 'secondary small';
+  swap.textContent = 'Swap them';
+  swap.addEventListener('click', () => { state.swap = !state.swap; analyse(); update(); });
+  line.append('Your tiles sit on a solid background, so it told them apart by colour: ', swatch(split.terrain), ' is the terrain and ', swatch(split.background), ' is the background. ', swap);
+  return line;
 }
 
 function renderPieces() {
@@ -318,6 +345,8 @@ function renderPieces() {
   box.append(Object.assign(document.createElement('span'), { className: 'head' }));
   for (const name of core.POSITION_NAMES) box.append(Object.assign(document.createElement('span'), { className: 'head', textContent: name }));
   for (const kind of core.ALL_KINDS) {
+    // See-through art has nothing to show as a background, so leave that row out.
+    if (kind === core.EMPTY_KIND && !hasVisible(pieces, kind)) continue;
     box.append(Object.assign(document.createElement('span'), { className: 'kind', textContent: core.KIND_NAMES[kind] }));
     for (let pos = 0; pos < 4; pos++) {
       const piece = pieces.get(pos, kind);
@@ -328,18 +357,30 @@ function renderPieces() {
       canvas.style.width = canvas.style.height = half * zoom + 'px';
       canvas.style.backgroundSize = `${Math.max(4, zoom * 2)}px ${Math.max(4, zoom * 2)}px`;
       if (piece) canvas.getContext('2d').putImageData(new ImageData(piece.pixels.slice(), half, half), 0, 0);
-      canvas.title = piece ? HOW_TEXT[piece.how](piece) : 'Not in your image: drawn empty';
+      canvas.title = piece ? HOW_TEXT[piece.how](piece, kind) : 'Not in your image: drawn empty';
       box.append(canvas);
     }
   }
 }
 
+function hasVisible(pieces, kind) {
+  return [0, 1, 2, 3].some((pos) => {
+    const px = pieces.get(pos, kind)?.pixels;
+    return px && px.some((v, i) => i % 4 === 3 && v >= 128);
+  });
+}
+
+/** True if any overhang piece shows something besides the plain background. */
 function hasOverhangArt(pieces) {
   for (const kind of core.OVERHANG_KINDS) {
     for (let pos = 0; pos < 4; pos++) {
       const p = pieces.get(pos, kind);
       if (!p || p.how !== 'found') continue;
-      for (let i = 3; i < p.pixels.length; i += 4) if (p.pixels[i] >= 128) return true;
+      const base = pieces.get(pos, core.EMPTY_KIND)?.pixels;
+      for (let i = 0; i < p.pixels.length; i += 4) {
+        if (p.pixels[i + 3] < 128) continue;
+        if (!base || [0, 1, 2, 3].some((k) => p.pixels[i + k] !== base[i + k])) return true;
+      }
     }
   }
   return false;

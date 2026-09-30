@@ -28,7 +28,11 @@ export const FILLED_KINDS = ['fill', 'outer', 'hedge', 'vedge', 'inner'];
 /** Pieces of an EMPTY cell next to filled ones: the art that overhangs into it.
  *  Named b + (vertical, horizontal, diagonal neighbour filled). */
 export const OVERHANG_KINDS = ['b100', 'b010', 'b001', 'b110', 'b101', 'b011', 'b111'];
-export const ALL_KINDS = [...FILLED_KINDS, ...OVERHANG_KINDS];
+/** The piece of an EMPTY cell with nothing filled nearby: whatever the terrain
+ *  sits on. See-through art leaves it blank; art on a solid background (grass
+ *  on water, say) shows that background here. */
+export const EMPTY_KIND = 'empty';
+export const ALL_KINDS = [...FILLED_KINDS, ...OVERHANG_KINDS, EMPTY_KIND];
 
 export const KIND_NAMES = {
   fill: 'Fill',
@@ -43,10 +47,10 @@ export const KIND_NAMES = {
   b101: 'Overhang from an edge above or below',
   b011: 'Overhang from an edge beside',
   b111: 'Overhang into an inner corner',
+  empty: 'Background, away from the terrain',
 };
 
-/** The piece a quarter shows, from its own cell and three neighbours.
- *  Returns null for an empty quarter with nothing filled nearby. */
+/** The piece a quarter shows, from its own cell and three neighbours. */
 export function pieceKind(filled, vertical, horizontal, diagonal) {
   if (filled) {
     if (!vertical && !horizontal) return 'outer';
@@ -55,7 +59,7 @@ export function pieceKind(filled, vertical, horizontal, diagonal) {
     if (!diagonal) return 'inner';
     return 'fill';
   }
-  if (!vertical && !horizontal && !diagonal) return null;
+  if (!vertical && !horizontal && !diagonal) return EMPTY_KIND;
   return 'b' + (vertical ? 1 : 0) + (horizontal ? 1 : 0) + (diagonal ? 1 : 0);
 }
 
@@ -119,10 +123,7 @@ export const TL = 1, TR = 2, BL = 4, BR = 8;
  *  which is that cell's opposite quarter (3 - q). */
 export function dualRecipe(corners) {
   const c = [0, 1, 2, 3].map((i) => (corners >> i) & 1);
-  return [0, 1, 2, 3].map((q) => {
-    const kind = pieceKind(c[q], c[q ^ 2], c[q ^ 1], c[q ^ 3]);
-    return kind ? { pos: 3 - q, kind } : null;
-  });
+  return [0, 1, 2, 3].map((q) => ({ pos: 3 - q, kind: pieceKind(c[q], c[q ^ 2], c[q ^ 1], c[q ^ 3]) }));
 }
 
 /** Four side bits (top 1, right 2, bottom 4, left 8) as a blob mask, with each
@@ -372,15 +373,25 @@ function flip(pixels, size, flipX, flipY) {
   return out;
 }
 
-/** Later layers drawn over earlier ones wherever they have a visible pixel. */
-function layer(list) {
+/** Later layers drawn over earlier ones wherever they have a visible pixel.
+ *  For art on a solid background, `base` is the background piece: there a
+ *  layer only shows where it isn't plain background, and where two layers
+ *  both show something, the one further from the background wins (the part
+ *  of a shoreline nearer the land, say). */
+function layer(list, base = null) {
   const out = list[0].slice();
   for (const top of list.slice(1)) {
     for (let i = 0; i < top.length; i += 4) {
-      if (top[i + 3] > 0) out.set(top.subarray(i, i + 4), i);
+      if (top[i + 3] === 0) continue;
+      if (base && pixelDistance2(top, base, i) <= pixelDistance2(out, base, i)) continue;
+      out.set(top.subarray(i, i + 4), i);
     }
   }
   return out;
+}
+
+function pixelDistance2(a, b, i) {
+  return (a[i] - b[i]) ** 2 + (a[i + 1] - b[i + 1]) ** 2 + (a[i + 2] - b[i + 2]) ** 2 + (a[i + 3] - b[i + 3]) ** 2;
 }
 
 function solid(size, rgba) {
@@ -436,50 +447,180 @@ function candidateSizes(w, h) {
   return SIZES.filter((t) => Math.floor(w / t) * Math.floor(h / t) >= 1);
 }
 
-/** Side of the square sampled at each dual tile's corners. */
-function cornerSample(t) {
-  return Math.max(1, t >> 2);
+/** Where a reading looks to decide whether a cell is filled, as [x, y, side]
+ *  squares within a tile: a dual tile's four corners (each the middle of a
+ *  terrain cell, as far from that cell's edges as you can get), or the middle
+ *  of a drawn cell. See-through art fades out past its edge, but art on a
+ *  solid background doesn't: a shoreline can reach most of the way to a
+ *  cell's middle. So a colour reading looks at smaller squares, right at the corner. */
+function sampleSpots(t, mode, split) {
+  if (mode === 'dual') {
+    const s = Math.max(1, t >> (split ? 3 : 2));
+    return [[0, 0, s], [t - s, 0, s], [0, t - s, s], [t - s, t - s, s]];
+  }
+  const m = t >> 2;
+  return [[m, m, t - 2 * m]];
 }
 
-/** A dual tile's corner bits, read from the pixels at its four corners.
- *  A corner of a dual tile is the middle of a terrain cell, as far from that
- *  cell's edges as you can get, so edge art rarely reaches it. */
-export function dualCornersAt(img, x0, y0, t) {
-  const s = cornerSample(t);
-  const spots = [[0, 0], [t - s, 0], [0, t - s], [t - s, t - s]];
+/** A dual tile's corner bits, read from the squares at its four corners.
+ *  `fillMap` is the image, or for art on a solid background its filledMap. */
+export function dualCornersAt(fillMap, x0, y0, t, split = null) {
   let key = 0;
-  spots.forEach(([dx, dy], i) => {
-    if (coverage(img, x0 + dx, y0 + dy, s, s) >= 0.5) key |= 1 << i;
+  sampleSpots(t, 'dual', split).forEach(([dx, dy, s], i) => {
+    if (coverage(fillMap, x0 + dx, y0 + dy, s, s) >= 0.5) key |= 1 << i;
   });
   return key;
 }
 
-function cellFilled(img, x0, y0, t) {
-  const m = t >> 2;
-  return coverage(img, x0 + m, y0 + m, t - 2 * m, t - 2 * m) >= 0.5;
+function cellFilled(fillMap, x0, y0, t) {
+  const [[dx, dy, s]] = sampleSpots(t, 'terrain', null);
+  return coverage(fillMap, x0 + dx, y0 + dy, s, s) >= 0.5;
 }
 
 /** How far from clean on/off the sampled spots are: 0 = every spot clearly
  *  full or clearly empty. */
-function ambiguity(img, t, mode) {
+function ambiguity(img, fillMap, t, mode, split) {
   const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
+  const spots = sampleSpots(t, mode, split);
   let sum = 0, count = 0;
-  const add = (c) => { sum += Math.min(c, 1 - c); count++; };
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       const x0 = x * t, y0 = y * t;
       if (coverage(img, x0, y0, t, t) === 0) continue;
-      if (mode === 'dual') {
-        const s = cornerSample(t);
-        for (const [dx, dy] of [[0, 0], [t - s, 0], [0, t - s], [t - s, t - s]]) add(coverage(img, x0 + dx, y0 + dy, s, s));
-      } else {
-        const m = t >> 2;
-        add(coverage(img, x0 + m, y0 + m, t - 2 * m, t - 2 * m));
+      for (const [dx, dy, s] of spots) {
+        const c = coverage(fillMap, x0 + dx, y0 + dy, s, s);
+        sum += Math.min(c, 1 - c);
+        count++;
       }
     }
   }
   return count ? sum / count : null;
 }
+
+// ---------------------------------------------------------------------------
+// Terrain on a solid background
+
+function distance2(a, b) {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+}
+
+/** Mean colour of a square's pixels, or null if any of them is see-through. */
+function meanColour(img, x, y, s) {
+  const sum = [0, 0, 0];
+  let n = 0;
+  for (let yy = Math.max(0, y); yy < Math.min(img.height, y + s); yy++) {
+    for (let xx = Math.max(0, x); xx < Math.min(img.width, x + s); xx++) {
+      const i = (yy * img.width + xx) * 4;
+      if (img.data[i + 3] < 128) return null;
+      sum[0] += img.data[i];
+      sum[1] += img.data[i + 1];
+      sum[2] += img.data[i + 2];
+      n++;
+    }
+  }
+  return n ? sum.map((v) => v / n) : null;
+}
+
+/** Split colours into the two groups that sit tightest around their own means,
+ *  starting from the two colours furthest apart. Returns { a, b, spread }, the
+ *  means and the RMS distance of each colour from its group's mean. */
+function twoMeans(colours) {
+  const furthest = (from) => colours.reduce((best, c) => (distance2(c, from) > distance2(best, from) ? c : best));
+  let b = furthest(colours[0]);
+  let a = furthest(b);
+  let spread = 0;
+  for (let round = 0; round < 16; round++) {
+    const sums = [[0, 0, 0, 0], [0, 0, 0, 0]];
+    let within = 0;
+    for (const c of colours) {
+      const da = distance2(c, a), db = distance2(c, b);
+      const sum = sums[da <= db ? 0 : 1];
+      for (let k = 0; k < 3; k++) sum[k] += c[k];
+      sum[3]++;
+      within += Math.min(da, db);
+    }
+    spread = Math.sqrt(within / colours.length);
+    if (!sums[0][3] || !sums[1][3]) return null;
+    const [na, nb] = sums.map((sum) => sum.slice(0, 3).map((v) => v / sum[3]));
+    if (distance2(na, a) < 0.01 && distance2(nb, b) < 0.01) break;
+    a = na;
+    b = nb;
+  }
+  return { a, b, spread };
+}
+
+/** Art drawn on a solid background (grass on water, say) has no see-through
+ *  pixels to tell filled from empty, so tell them apart by colour instead. If
+ *  every sample spot on the tiles is solid and the spots fall into two clearly
+ *  different colours, returns those two colours; otherwise null. */
+function colourSplit(img, t, mode) {
+  const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
+  const spots = sampleSpots(t, mode, true);
+  const colours = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (coverage(img, x * t, y * t, t, t) === 0) continue;
+      for (const [dx, dy, s] of spots) {
+        const c = meanColour(img, x * t + dx, y * t + dy, s);
+        if (!c) return null;
+        colours.push(c);
+      }
+    }
+  }
+  if (colours.length < 2) return null;
+  const groups = twoMeans(colours);
+  if (!groups) return null;
+  const gap = Math.sqrt(distance2(groups.a, groups.b));
+  return gap >= 48 && gap >= 4 * groups.spread ? [groups.a, groups.b] : null;
+}
+
+/** A copy of img whose alpha says which pixels are terrain: the solid ones
+ *  nearer the terrain colour than the background colour. */
+function filledMap(img, split) {
+  const out = createImage(img.width, img.height);
+  const d = img.data;
+  const [tr, tg, tb] = split.terrain, [br, bg, bb] = split.background;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 128) continue;
+    const toTerrain = (d[i] - tr) ** 2 + (d[i + 1] - tg) ** 2 + (d[i + 2] - tb) ** 2;
+    const toBackground = (d[i] - br) ** 2 + (d[i + 1] - bg) ** 2 + (d[i + 2] - bb) ** 2;
+    if (toTerrain < toBackground) out.data[i + 3] = 255;
+  }
+  return out;
+}
+
+/** Which of two colours is the terrain: the one that spills over into the
+ *  other's cells, the way edge art (an outline, a shoreline) overhangs from a
+ *  filled cell into an empty one. Returns { terrain, background }. */
+function orient(img, t, mode, [a, b]) {
+  const inA = filledMap(img, { terrain: a, background: b });
+  const inB = filledMap(img, { terrain: b, background: a });
+  const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
+  const spots = sampleSpots(t, mode, true);
+  const h = t >> 1;
+  // Per group: how many quarters belong to its cells, and how much of the
+  // other colour they hold between them.
+  const cells = [0, 0], spilt = [0, 0];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const x0 = x * t, y0 = y * t;
+      if (coverage(img, x0, y0, t, t) === 0) continue;
+      for (let q = 0; q < 4; q++) {
+        const [dx, dy, s] = spots[mode === 'dual' ? q : 0];
+        const group = coverage(inA, x0 + dx, y0 + dy, s, s) >= 0.5 ? 0 : 1;
+        const qx = x0 + (q & 1) * h, qy = y0 + (q >> 1) * h;
+        cells[group]++;
+        spilt[group] += coverage(group ? inA : inB, qx, qy, h, h);
+      }
+    }
+  }
+  // Compare rates: B's cells hold more of A per quarter than A's hold of B.
+  const aSpills = spilt[1] * cells[0] >= spilt[0] * cells[1];
+  return aSpills ? { terrain: a, background: b } : { terrain: b, background: a };
+}
+
+// ---------------------------------------------------------------------------
+// Scoring a reading
 
 /** True if two pixels look different: one shows and the other doesn't, or
  *  both show in clearly different colours. */
@@ -496,18 +637,21 @@ function differs(a, i, b, j) {
  *   - rebuild error: pixels that come out wrong when every tile is rebuilt from
  *     the one example of each piece the reading kept.
  *  A clean image also reads cleanly on a finer grid, and a tidy dual sheet can
- *  pass for a coarser one; the rebuild and contradiction terms catch the second. */
-function readingScore(img, t, mode) {
-  const amb = ambiguity(img, t, mode);
+ *  pass for a coarser one; the rebuild and contradiction terms catch the second.
+ *  `split` is null to read filled cells from what's see-through, or the
+ *  { terrain, background } colours to read them from colour. */
+function readingScore(img, t, mode, split) {
+  const fillMap = split ? filledMap(img, split) : img;
+  const amb = ambiguity(img, fillMap, t, mode, split);
   if (amb === null) return null;
-  const { pieces, placements } = extract(img, t, mode, null);
+  const { pieces, placements } = extract(img, t, mode, { split, fillMap });
   const h = t >> 1;
   const rebuilt = createImage(t, t);
   let quarters = 0, contradiction = 0, pixels = 0, wrong = 0;
   for (const { x0, y0, recipe } of placements) {
     recipe.forEach((part, q) => {
-      const cov = coverage(img, x0 + (q & 1) * h, y0 + (q >> 1) * h, h, h);
-      const filled = part !== null && FILLED_KINDS.includes(part.kind);
+      const cov = coverage(fillMap, x0 + (q & 1) * h, y0 + (q >> 1) * h, h, h);
+      const filled = FILLED_KINDS.includes(part.kind);
       contradiction += filled ? Math.max(0, 0.5 - cov) : Math.max(0, cov - 0.5);
       quarters++;
     });
@@ -524,9 +668,14 @@ function readingScore(img, t, mode) {
   return amb + contradiction / quarters + wrong / pixels;
 }
 
+// ---------------------------------------------------------------------------
+// Choosing a reading
+
 /** Guess the tile size and grid reading: of the readings that score within a
  *  whisker of the best, the one with the biggest tiles, since a finer grid can
- *  always explain an image by cutting real tiles into smaller ones. */
+ *  always explain an image by cutting real tiles into smaller ones. Each size
+ *  is tried reading filled cells from transparency and, when the tiles are
+ *  solid, from colour. `split` in the result is null or { terrain, background }. */
 export function detect(img, { mode = null, tileSize = 0 } = {}) {
   const sizes = tileSize ? [tileSize] : candidateSizes(img.width, img.height);
   const modes = mode ? [mode] : ['dual', 'terrain'];
@@ -534,8 +683,11 @@ export function detect(img, { mode = null, tileSize = 0 } = {}) {
   for (const t of sizes) {
     if (t < 2 || t % 2) continue;
     for (const m of modes) {
-      const score = readingScore(img, t, m);
-      if (score !== null) results.push({ mode: m, tileSize: t, score });
+      const colours = colourSplit(img, t, m);
+      for (const split of colours ? [null, orient(img, t, m, colours)] : [null]) {
+        const score = readingScore(img, t, m, split);
+        if (score !== null) results.push({ mode: m, tileSize: t, split, score });
+      }
     }
   }
   if (!results.length) return null;
@@ -545,10 +697,22 @@ export function detect(img, { mode = null, tileSize = 0 } = {}) {
   return { ...close[0], results };
 }
 
-/** Cut an image into pieces, reading its grid as `mode` ('dual', 'terrain', or
- *  a layout's slots). Returns the pieces, the tiles it found, and every tile's
- *  recipe with its position (placements), for checking the reading. */
-function extract(img, t, mode, layout) {
+/** For an image with no see-through pixels: whether its border colour `rgb`
+ *  is a backdrop to make see-through. Not when the image reads as terrain on
+ *  a solid background and that colour is the terrain's own, since keying it
+ *  out would erase the terrain. */
+export function isBackdrop(img, rgb) {
+  const found = detect(img);
+  if (!found || !found.split) return true;
+  return distance2(rgb, found.split.background) <= distance2(rgb, found.split.terrain);
+}
+
+/** Cut an image into pieces, reading its grid as `mode` ('dual' or 'terrain')
+ *  or as `layout`'s slots. Filled cells are read from `fillMap`: the image, or
+ *  its filledMap for art on a solid background. Returns the pieces, the tiles
+ *  it found, and every tile's recipe with its position (placements), for
+ *  checking the reading. */
+function extract(img, t, mode, { layout = null, split = null, fillMap = img } = {}) {
   const pieces = new Pieces(t >> 1);
   const placements = [];
   const tiles = [];
@@ -556,7 +720,7 @@ function extract(img, t, mode, layout) {
     placements.push({ x0, y0, recipe });
     const h = t >> 1;
     recipe.forEach((part, q) => {
-      if (part) pieces.offer(part.pos, part.kind, crop(img, x0 + (q & 1) * h, y0 + (q >> 1) * h, h, h), { ...from, q });
+      pieces.offer(part.pos, part.kind, crop(img, x0 + (q & 1) * h, y0 + (q >> 1) * h, h, h), { ...from, q });
     });
   };
   const cols = Math.floor(img.width / t), rows = Math.floor(img.height / t);
@@ -569,14 +733,14 @@ function extract(img, t, mode, layout) {
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         if (coverage(img, x * t, y * t, t, t) === 0) continue;
-        const key = dualCornersAt(img, x * t, y * t, t);
+        const key = dualCornersAt(fillMap, x * t, y * t, t, split);
         tiles.push({ x, y, key });
         take(dualRecipe(key), x * t, y * t, { x, y });
       }
     }
   } else {
     const grid = [];
-    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) grid.push(cellFilled(img, x * t, y * t, t));
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) grid.push(cellFilled(fillMap, x * t, y * t, t));
     const filled = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows && grid[y * cols + x];
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
@@ -584,12 +748,9 @@ function extract(img, t, mode, layout) {
         const mask = maskAt(filled, x, y);
         if (!on && !mask && coverage(img, x * t, y * t, t, t) === 0) continue;
         if (on) tiles.push({ x, y, key: mask });
-        // A lone, completely solid tile is a fill swatch, not an island.
-        const swatch = on && mask === 0 && coverage(img, x * t, y * t, t, t) === 1;
-        const recipe = QUARTER_BITS.map(([v, hb, d], q) => {
-          const kind = swatch ? 'fill' : pieceKind(on, mask & v, mask & hb, mask & d);
-          return kind ? { pos: q, kind } : null;
-        });
+        // A lone tile that's terrain all over is a fill swatch, not an island.
+        const swatch = on && mask === 0 && coverage(fillMap, x * t, y * t, t, t) === 1;
+        const recipe = QUARTER_BITS.map(([v, hb, d], q) => ({ pos: q, kind: swatch ? 'fill' : pieceKind(on, mask & v, mask & hb, mask & d) }));
         take(recipe, x * t, y * t, { x, y });
       }
     }
@@ -599,10 +760,14 @@ function extract(img, t, mode, layout) {
 
 /** Read a source image into pieces.
  *  `read` is 'auto', 'dual', 'terrain' or a layout id; `tileSize` 0 = work it out.
- *  Returns { read, tileSize, pieces, tiles, cols, rows } or throws a readable Error. */
-export function readSource(img, { read = 'auto', tileSize = 0 } = {}) {
+ *  For art on a solid background, `swap` swaps which colour is the terrain.
+ *  Returns { read, tileSize, pieces, tiles, cols, rows, split } or throws a
+ *  readable Error. `split` is null, or the { terrain, background } colours
+ *  when filled cells were told apart by colour. */
+export function readSource(img, { read = 'auto', tileSize = 0, swap = false } = {}) {
   let t = tileSize;
   let mode = read;
+  let split = null;
   const layout = layoutById(read);
   if (layout) {
     t = t || Math.floor(img.width / layout.cols);
@@ -614,11 +779,13 @@ export function readSource(img, { read = 'auto', tileSize = 0 } = {}) {
     if (!found) throw new Error('Couldn’t find any tiles. Is the image empty, or is the tile size bigger than the image?');
     mode = found.mode;
     t = found.tileSize;
+    split = found.split;
+    if (split && swap) split = { terrain: split.background, background: split.terrain };
   }
   if (t < 2 || t % 2) throw new Error(`The tile size has to be an even number of pixels (got ${t}), because every tile is cut into quarters.`);
-  const { pieces, tiles } = extract(img, t, mode, layout);
+  const { pieces, tiles } = extract(img, t, mode, { layout, split, fillMap: split ? filledMap(img, split) : img });
   completePieces(pieces);
-  return { read: mode, tileSize: t, pieces, tiles, cols: Math.floor(img.width / t), rows: Math.floor(img.height / t) };
+  return { read: mode, tileSize: t, pieces, tiles, cols: Math.floor(img.width / t), rows: Math.floor(img.height / t), split };
 }
 
 // ---------------------------------------------------------------------------
@@ -630,9 +797,9 @@ const OVERHANG_STAND_INS = [
   ['b110', [['b100', 'b010']]],
 ];
 
-function dominantColour(pieces) {
+function dominantColour(pieces, kinds) {
   const counts = new Map();
-  for (const kind of FILLED_KINDS) {
+  for (const kind of kinds) {
     for (let pos = 0; pos < 4; pos++) {
       const piece = pieces.get(pos, kind);
       if (!piece || piece.how !== 'found') continue;
@@ -650,8 +817,29 @@ function dominantColour(pieces) {
   return [(best >>> 24) & 255, (best >>> 16) & 255, (best >>> 8) & 255, best & 255];
 }
 
+function isSolid(pixels) {
+  for (let i = 3; i < pixels.length; i += 4) if (pixels[i] < 128) return false;
+  return true;
+}
+
+/** True if every overhang piece the source showed is solid all over: the art
+ *  sits on a solid background rather than a see-through one. */
+function solidBackground(pieces) {
+  let any = false;
+  for (const kind of OVERHANG_KINDS) {
+    for (let pos = 0; pos < 4; pos++) {
+      const piece = pieces.get(pos, kind);
+      if (!piece || piece.how !== 'found') continue;
+      if (!isSolid(piece.pixels)) return false;
+      any = true;
+    }
+  }
+  return any;
+}
+
 /** Fill in pieces the source didn't show, marking how each was made:
- *  mirrored or copied from another corner, a flat fill, a stand-in, or layered. */
+ *  mirrored or copied from another corner, a flat fill or background, a
+ *  stand-in, or layered. */
 export function completePieces(pieces) {
   const size = pieces.half;
   for (const kind of ALL_KINDS) {
@@ -660,7 +848,7 @@ export function completePieces(pieces) {
       for (const m of [1, 2, 3]) {
         const src = pieces.get(pos ^ m, kind);
         if (!src || src.how !== 'found') continue;
-        if (kind === 'fill') {
+        if (kind === 'fill' || kind === EMPTY_KIND) {
           pieces.set(pos, kind, { pixels: src.pixels.slice(), how: 'copied', from: { pos: pos ^ m } });
         } else {
           pieces.set(pos, kind, { pixels: flip(src.pixels, size, (m & 1) !== 0, (m & 2) !== 0), how: 'mirrored', from: { pos: pos ^ m } });
@@ -670,10 +858,16 @@ export function completePieces(pieces) {
     }
   }
   if (![0, 1, 2, 3].some((pos) => pieces.get(pos, 'fill'))) {
-    const colour = dominantColour(pieces);
+    const colour = dominantColour(pieces, FILLED_KINDS);
     if (colour) {
       for (let pos = 0; pos < 4; pos++) pieces.set(pos, 'fill', { pixels: solid(size, colour), how: 'flat', colour });
     }
+  }
+  // See-through art needs no background piece: blank is right. On a solid
+  // background, a flat patch of its commonest colour stands in for one.
+  if (![0, 1, 2, 3].some((pos) => pieces.get(pos, EMPTY_KIND)) && solidBackground(pieces)) {
+    const colour = dominantColour(pieces, OVERHANG_KINDS);
+    for (let pos = 0; pos < 4; pos++) pieces.set(pos, EMPTY_KIND, { pixels: solid(size, colour), how: 'flat', colour });
   }
   for (const kind of ['outer', 'hedge', 'vedge', 'inner']) {
     for (let pos = 0; pos < 4; pos++) {
@@ -687,7 +881,9 @@ export function completePieces(pieces) {
       for (const option of options) {
         const parts = option.map((k) => pieces.get(pos, k));
         if (parts.every(Boolean)) {
-          pieces.set(pos, kind, { pixels: layer(parts.map((p) => p.pixels)), how: 'layered', from: { kinds: option } });
+          const base = pieces.get(pos, EMPTY_KIND);
+          const solidBase = base && isSolid(base.pixels) ? base.pixels : null;
+          pieces.set(pos, kind, { pixels: layer(parts.map((p) => p.pixels), solidBase), how: 'layered', from: { kinds: option } });
           break;
         }
       }
@@ -712,10 +908,12 @@ export function summarise(pieces) {
     return out;
   };
   const fill = pieces.get(0, 'fill');
+  const background = pieces.get(0, EMPTY_KIND);
   return {
     terrain: tally(FILLED_KINDS),
     overhang: tally(OVERHANG_KINDS),
     flatFill: fill && fill.how === 'flat' ? fill.colour : null,
+    flatBackground: background && background.how === 'flat' ? background.colour : null,
   };
 }
 
@@ -725,7 +923,6 @@ export function summarise(pieces) {
 export function drawTile(out, pieces, recipe, x0, y0, t) {
   const h = t >> 1;
   recipe.forEach((part, q) => {
-    if (!part) return;
     const piece = pieces.get(part.pos, part.kind);
     if (piece) paste(piece.pixels, h, h, out, x0 + (q & 1) * h, y0 + (q >> 1) * h);
   });
@@ -802,7 +999,9 @@ export const DEMO_WORLD = [
 
 /** Paint `world` with a sheet the way a game would: look each cell (blob) or
  *  each corner (dual) up in the layout and copy that tile. Layouts that aren't
- *  autotile sheets are drawn straight from the pieces instead. */
+ *  autotile sheets are drawn straight from the pieces instead. Blob sheets
+ *  have no tile for an empty cell, so those show the background piece, the
+ *  way a game would show a plain background layer underneath. */
 export function renderMap(world, t, layout, sheet, pieces) {
   const out = createImage(world.w * t, world.h * t);
   const on = (x, y) => x >= 0 && y >= 0 && x < world.w && y < world.h && world.cells[y * world.w + x] === 1;
@@ -812,15 +1011,19 @@ export function renderMap(world, t, layout, sheet, pieces) {
     for (let vy = 0; vy <= world.h; vy++) {
       for (let vx = 0; vx <= world.w; vx++) {
         const key = (on(vx - 1, vy - 1) ? TL : 0) | (on(vx, vy - 1) ? TR : 0) | (on(vx - 1, vy) ? BL : 0) | (on(vx, vy) ? BR : 0);
-        const slot = key ? index.get(key) : null;
+        const slot = index.get(key);
         if (slot) blitRegion(sheet, slot.x * t, slot.y * t, t, t, out, vx * t - h, vy * t - h);
       }
     }
     return out;
   }
+  const background = [0, 1, 2, 3].map((q) => ({ pos: q, kind: EMPTY_KIND }));
   for (let y = 0; y < world.h; y++) {
     for (let x = 0; x < world.w; x++) {
-      if (!on(x, y)) continue;
+      if (!on(x, y)) {
+        drawTile(out, pieces, background, x * t, y * t, t);
+        continue;
+      }
       const mask = canonicalMask(maskAt(on, x, y));
       const key = layout.godot === 'sides' ? sidesMask(sidesOf(mask)) : mask;
       const slot = layout.paintable ? index.get(key) : null;

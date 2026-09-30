@@ -16,11 +16,15 @@ const USAGE = `Usage: node cli.mjs <image.png> [options]
   --godot-dir DIR   where the sheets will live in your Godot project,
                     for the .tres files (default: res://tiles/)
   --terrain NAME    the terrain's name in Godot (default: Terrain)
+  --swap            for tiles on a solid background (grass on water, say),
+                    swap which colour is the terrain and which the background
+  --keep-border     for an image with no transparency, keep its border colour
+                    rather than treating it as transparent
   --blank           write blank templates instead of converting an image
                     (needs --tile; no image argument)`;
 
 function parseArgs(argv) {
-  const args = { read: 'auto', tile: 0, out: 'out', only: null, godotDir: 'res://tiles/', terrain: 'Terrain', blank: false, input: null };
+  const args = { read: 'auto', tile: 0, out: 'out', only: null, godotDir: 'res://tiles/', terrain: 'Terrain', blank: false, swap: false, keepBorder: false, input: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -34,6 +38,8 @@ function parseArgs(argv) {
     else if (a === '--godot-dir') args.godotDir = next();
     else if (a === '--terrain') args.terrain = next();
     else if (a === '--blank') args.blank = true;
+    else if (a === '--swap') args.swap = true;
+    else if (a === '--keep-border') args.keepBorder = true;
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a.startsWith('--')) throw new Error(`Unknown option ${a}.`);
     else args.input = a;
@@ -55,15 +61,21 @@ function main() {
     name = 'template';
   } else {
     let img = decodePng(readFileSync(args.input));
-    if (!core.hasTransparency(img)) img = core.keyOut(img, core.borderColour(img));
-    const source = core.readSource(img, { read: args.read, tileSize: args.tile });
+    if (!core.hasTransparency(img) && !args.keepBorder) {
+      const border = core.borderColour(img);
+      if (core.isBackdrop(img, border)) img = core.keyOut(img, border);
+    }
+    const source = core.readSource(img, { read: args.read, tileSize: args.tile, swap: args.swap });
     ({ pieces, tileSize } = source);
     name = basename(args.input, extname(args.input));
     const s = core.summarise(pieces);
+    const hex = (rgb) => '#' + rgb.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
     console.log(`Read ${args.input} as ${source.read === 'dual' ? 'dual-grid tiles' : source.read === 'terrain' ? 'a terrain drawing' : source.read}, ${tileSize}px tiles.`);
+    if (source.split) console.log(`The tiles sit on a solid background: ${hex(source.split.terrain)} is the terrain and ${hex(source.split.background)} the background${args.swap ? ' (swapped)' : ' (--swap to swap them)'}.`);
     console.log(`Terrain pieces: ${s.terrain.found} found, ${s.terrain.adapted} mirrored, ${s.terrain.madeUp} made up, ${s.terrain.missing} missing.`);
     console.log(`Overhang pieces: ${s.overhang.found} found, ${s.overhang.adapted} mirrored, ${s.overhang.madeUp} made up, ${s.overhang.missing} missing.`);
-    if (s.flatFill) console.log(`No fill tile in the image, so the fill is flat #${s.flatFill.slice(0, 3).map((v) => v.toString(16).padStart(2, '0')).join('')}.`);
+    if (s.flatFill) console.log(`No fill tile in the image, so the fill is flat ${hex(s.flatFill)}.`);
+    if (s.flatBackground) console.log(`No plain background tile in the image, so the background is flat ${hex(s.flatBackground)}.`);
   }
   mkdirSync(args.out, { recursive: true });
   const dir = args.godotDir.endsWith('/') ? args.godotDir : args.godotDir + '/';

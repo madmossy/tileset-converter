@@ -13,6 +13,8 @@ It runs entirely in your browser. Your images never leave your computer.
    - **A drawing of terrain on the grid**, such as a 3×3 block with a hole in the middle.
    - **A finished sheet** in any of the layouts below.
 
+   The empty parts can be see-through, or filled in with a second terrain, such as grass drawn on water. With a solid background, the converter tells the two apart by colour and shows which one it took as the terrain. Click **Swap them** if it picked the wrong way round.
+
    The converter works out the tile size and which kind it is. Dots on the preview show what it found. If it guesses wrong, set **Read it as** and **Tile size** yourself.
 2. **Download the layouts you want.** Each card has the PNG, and the autotile layouts also have a Godot TileSet. Put the PNG in the folder named in *Where the PNGs will live*, then open the `.tres` in Godot.
 3. **Try it.** Paint on the map at the bottom to see the sheet working the way a game would draw it.
@@ -46,11 +48,11 @@ Every tile in every layout is four quarter-tiles. A quarter belongs to one terra
 - A **blob** tile sits on a cell: its quarters are that cell's own.
 - A **dual-grid** tile sits where four cells meet: each quarter is the nearest quarter of a different cell. The quarters of *empty* cells carry any art that overhangs into them.
 
-So the converter cuts your image into quarters, names each one by its neighbours, and glues them back together in every layout. That makes 20 kinds of quarter for filled cells (fill, outer corner, top/bottom edge, side edge and inner corner, at 4 positions) and 28 kinds of overhang.
+So the converter cuts your image into quarters, names each one by its neighbours, and glues them back together in every layout. That makes 20 kinds of quarter for filled cells (fill, outer corner, top/bottom edge, side edge and inner corner, at 4 positions) and 28 kinds of overhang. A quarter with no filled cells nearby shows the background: blank for see-through art, or plain water (say) for art on a solid background.
 
-When something isn't in your image, it fills the gap and says so in *The pieces it found*. It mirrors a piece from another corner, uses a flat fill colour when there's no fill tile, or layers two overhang pieces together.
+When something isn't in your image, it fills the gap and says so in *The pieces it found*. It mirrors a piece from another corner, uses a flat colour when there's no fill tile or no plain background tile, or layers two overhang pieces together.
 
-To read an image it tries every tile size that fits, as both dual-grid tiles and a terrain drawing. For each reading it rebuilds the image from the pieces found and counts the pixels that come out wrong. The best reading, with the largest tiles, wins.
+To read an image it tries every tile size that fits, as both dual-grid tiles and a terrain drawing. A cell is filled where the image isn't see-through. When the tiles are solid all over, it also tries splitting the middles of the cells into two colours. It takes as the terrain the colour that spills over into the other's cells, the way an outline or a shoreline does. For each reading it rebuilds the image from the pieces found and counts the pixels that come out wrong. The best reading, with the largest tiles, wins.
 
 ## Command line
 
@@ -60,7 +62,7 @@ The same converter runs in Node (20 or newer), with no dependencies:
 node cli.mjs examples/dual-example.png --out out
 ```
 
-Options: `--read auto|dual|terrain|<layout id>`, `--tile N`, `--only dual-standard,blob-godot`, `--godot-dir res://tiles/`, `--terrain Grass`, and `--blank --tile 16` for blank templates.
+Options: `--read auto|dual|terrain|<layout id>`, `--tile N`, `--only dual-standard,blob-godot`, `--godot-dir res://tiles/`, `--terrain Grass`, and `--blank --tile 16` for blank templates. For tiles on a solid background, `--swap` swaps which colour is the terrain. An image with no transparency has its border colour made see-through (unless that colour is the terrain's); `--keep-border` stops that.
 
 ## Developing
 
@@ -79,7 +81,7 @@ Then open http://localhost:8765.
 - `src/core.js` holds the conversion (layouts, reading, pieces, composing, the Godot TileSet). It has no DOM code, so the page, the CLI and the tests share it.
 - `src/app.js` and `src/style.css` are the page.
 - `cli.mjs` and `tools/png.mjs` are the command line and its PNG reader/writer.
-- `tools/make-example.mjs` draws `examples/dual-example.png` from simple geometry, so the example is original and free to share. Run `node tools/make-example.mjs 32` for a 32px version.
+- `tools/example-art.mjs` draws the example's art from simple geometry, so it's original and free to share. It can also draw the art on water, which the tests use. `tools/make-example.mjs` writes `examples/dual-example.png` from it; run `node tools/make-example.mjs 32` for a 32px version.
 - `tests/core.test.mjs` holds the tests.
 
 Every push runs the tests on GitHub Actions, and a green push to `main` publishes the site to GitHub Pages (`.github/workflows/pages.yml`).

@@ -3,8 +3,29 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as core from '../src/core.js';
 import { decodePng, encodePng } from '../tools/png.mjs';
+import { exampleImage, EXAMPLE_TILES } from '../tools/example-art.mjs';
 
 const example = () => decodePng(readFileSync(new URL('../examples/dual-example.png', import.meta.url)));
+
+/** The example's sand on water instead of on nothing: every empty part of every
+ *  tile is filled, and a wide shoreline reaches most of the way to the middle
+ *  of each water cell. The unused slot stays see-through, and so, unless
+ *  `fillSwatch`, does the fill tile. */
+function waterExample(t, { fillSwatch = false } = {}) {
+  const img = exampleImage(t, { water: true });
+  if (!fillSwatch) core.blitRegion(core.createImage(t, t), 0, 0, t, t, img, 2 * t, 4 * t);
+  return img;
+}
+
+const nearer = (rgb, a, b) => {
+  const d = (c) => c.reduce((sum, v, i) => sum + (v - rgb[i]) ** 2, 0);
+  return d(a) < d(b);
+};
+const SAND = [186, 138, 84], WATER = [40, 110, 190];
+
+/** Corner bits the example's tiles should read as, row by row. */
+const exampleKeys = (fillSwatch) => EXAMPLE_TILES.flatMap((row, y) => row.map((key, x) => ({ x, y, key })))
+  .filter(({ x, y, key }) => key !== null && (fillSwatch || !(x === 2 && y === 4)));
 
 /** Pieces where every position x kind is a distinct, fully opaque pattern. */
 function distinctPieces(half) {
@@ -189,6 +210,80 @@ test('converting the example to dual grid keeps the tiles it came from', () => {
   }
 });
 
+test('tiles on a solid background are read by colour, the same as see-through ones', () => {
+  for (const t of [16, 32]) {
+    for (const fillSwatch of [true, false]) {
+      const label = `${t}px, ${fillSwatch ? 'with' : 'without'} a fill tile`;
+      const source = core.readSource(waterExample(t, { fillSwatch }));
+      assert.deepEqual([source.read, source.tileSize], ['dual', t], label);
+      assert.deepEqual(source.tiles.map(({ x, y, key }) => ({ x, y, key })), exampleKeys(fillSwatch), label);
+      assert.ok(nearer(source.split.terrain, SAND, WATER), `${label}: the sand is the terrain`);
+      assert.ok(nearer(source.split.background, WATER, SAND), `${label}: the water is the background`);
+      const s = core.summarise(source.pieces);
+      assert.equal(s.terrain.found, fillSwatch ? 20 : 16, label);
+      assert.equal(s.overhang.found, 24, label);
+      assert.equal(s.overhang.missing, 0, label);
+      assert.equal(s.flatBackground, null, `${label}: the empty middle tile gives the background`);
+      for (let pos = 0; pos < 4; pos++) assert.equal(source.pieces.get(pos, core.EMPTY_KIND).how, 'found', label);
+    }
+  }
+});
+
+test('swapping reads the background as the terrain instead', () => {
+  const source = core.readSource(waterExample(16), { swap: true });
+  assert.ok(nearer(source.split.terrain, WATER, SAND));
+  assert.deepEqual(source.tiles.map(({ x, y, key }) => ({ x, y, key })), exampleKeys(false).map((tile) => ({ ...tile, key: 15 - tile.key })));
+  const s = core.summarise(source.pieces);
+  assert.equal(s.terrain.found, 20, 'the all-water tile is now the fill');
+  assert.deepEqual(s.flatBackground, [...SAND, 255], 'and the background is flat sand');
+});
+
+test('converting tiles on a solid background keeps the tiles they came from', () => {
+  // The art is drawn from one set of pieces, so every tile rebuilds exactly.
+  const t = 16;
+  const img = waterExample(t);
+  const source = core.readSource(img);
+  for (const tile of source.tiles) {
+    const out = core.createImage(t, t);
+    core.drawTile(out, source.pieces, core.dualRecipe(tile.key), 0, 0, t);
+    const original = core.createImage(t, t);
+    core.blitRegion(img, tile.x * t, tile.y * t, t, t, original, 0, 0);
+    assert.deepEqual(out.data, original.data, `tile ${tile.x},${tile.y}`);
+  }
+  // Every dual tile comes out solid, the empty one plain water.
+  const layout = core.layoutById('dual-standard');
+  const sheet = core.composeSheet(source.pieces, layout, t);
+  assert.ok(!core.hasTransparency(sheet));
+  const empty = layout.slots.find((slot) => slot.key === 0);
+  const px = (x, y) => [...sheet.data.subarray((y * sheet.width + x) * 4, (y * sheet.width + x) * 4 + 3)];
+  for (const [dx, dy] of [[0, 0], [t - 1, 0], [t >> 1, t >> 1], [0, t - 1]]) assert.deepEqual(px(empty.x * t + dx, empty.y * t + dy), WATER);
+});
+
+test('painting a map on a solid background shows the background away from the terrain', () => {
+  const t = 16;
+  const { pieces } = core.readSource(waterExample(t));
+  const world = core.worldFromText(['....', '.##.', '....']);
+  for (const id of ['dual-standard', 'blob-godot']) {
+    const layout = core.layoutById(id);
+    const map = core.renderMap(world, t, layout, core.composeSheet(pieces, layout, t), pieces);
+    assert.ok(!core.hasTransparency(map), id);
+    const i = (2 * map.width + 2) * 4;
+    assert.deepEqual([...map.data.subarray(i, i + 3)], WATER, `${id}: a far corner is water`);
+  }
+});
+
+test('a solid image keeps its border colour when that colour is the terrain', () => {
+  const t = 16;
+  const img = exampleImage(t, { water: true });
+  core.drawTile(img, core.readSource(img).pieces, core.dualRecipe(0), 2 * t, 3 * t, t); // fill the unused slot too
+  assert.ok(!core.hasTransparency(img));
+  const border = core.borderColour(img);
+  assert.deepEqual(border, SAND, 'most of the border is sand');
+  assert.equal(core.isBackdrop(img, border), false);
+  assert.equal(core.isBackdrop(img, WATER), true);
+  assert.deepEqual(core.readSource(img).tiles.map((tile) => tile.key).slice(0, 9), exampleKeys(true).map((tile) => tile.key).slice(0, 9));
+});
+
 test('painting a map gives the same picture whichever sheet of a family is used', () => {
   const t = 16;
   const pieces = distinctPieces(t / 2);
@@ -235,6 +330,7 @@ test('opaque images have their background colour keyed out', () => {
   const img = core.createImage(4, 4);
   for (let i = 0; i < 16; i++) img.data.set(i === 5 ? [10, 20, 30, 255] : [255, 255, 255, 255], i * 4);
   assert.ok(!core.hasTransparency(img));
+  assert.ok(core.isBackdrop(img, core.borderColour(img)));
   const keyed = core.keyOut(img, core.borderColour(img));
   assert.equal(keyed.data[5 * 4 + 3], 255);
   assert.equal(keyed.data[3], 0);
