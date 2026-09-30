@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tileset Converter</title>
+  <meta name="description" content="Convert a terrain tileset between Godot's dual-grid, blob-47 and Match Sides layouts, right in your browser.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4' shape-rendering='crispEdges'%3E%3Crect width='4' height='4' fill='%23e8e4d8'/%3E%3Cpath d='M0 2h2v2H0zM1 1h3v2H1zM2 0h2v1H2z' fill='%233e8948'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="src/style.css">
+  <script type="module" src="src/app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Tileset Converter</h1>
+      <p class="lede">Give it one example of your terrain and get back every tile layout Godot uses (dual grid, blob&nbsp;47 and Match&nbsp;Sides), each with a ready-made Godot TileSet.</p>
+    </div>
+    <a class="source-link" href="https://github.com/madmossy/tileset-converter">Source on GitHub</a>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="step-source">
+      <div class="panel-head">
+        <span class="step" aria-hidden="true">1</span>
+        <h2 id="step-source">Your tiles</h2>
+      </div>
+      <div class="source-grid">
+        <div class="drop" id="drop">
+          <input type="file" id="file" accept="image/png,image/webp,image/gif,image/jpeg" hidden>
+          <div class="drop-empty" id="drop-empty">
+            <p><strong>Drop a PNG here</strong>, paste one, or</p>
+            <div class="button-row">
+              <button type="button" id="choose">Choose a file</button>
+              <button type="button" id="load-example" class="secondary">Try an example</button>
+            </div>
+          </div>
+          <div class="source-view" id="source-wrap" hidden>
+            <canvas id="source-view" class="checker"></canvas>
+            <div class="button-row">
+              <button type="button" id="choose-again" class="secondary">Choose another</button>
+              <button type="button" id="load-example-again" class="secondary">Example</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="source-controls">
+          <label class="field">
+            <span>Read it as</span>
+            <select id="read-mode"></select>
+          </label>
+          <label class="field">
+            <span>Tile size</span>
+            <span class="with-unit"><input id="tile-size" type="number" min="2" step="2" placeholder="Auto" inputmode="numeric"> px</span>
+          </label>
+          <label class="field check" id="key-row" hidden>
+            <input type="checkbox" id="key-on" checked>
+            <span>Treat the background colour <span class="swatch" id="key-swatch"></span> as transparent</span>
+          </label>
+          <div id="status" class="status" aria-live="polite"></div>
+          <details id="pieces-details">
+            <summary>The pieces it found</summary>
+            <p class="hint">Every tile, in every layout, is four quarter-tiles. Each quarter belongs to one terrain cell and looks the way it does because of three neighbours: the one above or below, the one beside, and the diagonal. These are all the quarters your image showed, and how the missing ones were filled in.</p>
+            <div id="pieces" class="pieces"></div>
+            <ul class="legend">
+              <li><span class="dot found"></span>Found in your image</li>
+              <li><span class="dot adapted"></span>Mirrored or copied from another corner</li>
+              <li><span class="dot made"></span>Made up: flat fill, stand-in or layered</li>
+              <li><span class="dot missing"></span>Not in your image, left empty</li>
+            </ul>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="step-layouts">
+      <div class="panel-head">
+        <span class="step" aria-hidden="true">2</span>
+        <h2 id="step-layouts">Layouts</h2>
+        <div class="seg" role="group" aria-label="What to show">
+          <button type="button" data-show="tiles" aria-pressed="true">Your tiles</button>
+          <button type="button" data-show="blank" aria-pressed="false">Blank templates</button>
+        </div>
+      </div>
+      <div class="godot-row">
+        <label class="field inline">
+          <span>Where the PNGs will live in your Godot project</span>
+          <input id="godot-dir" value="res://tiles/" spellcheck="false">
+        </label>
+        <label class="field inline">
+          <span>Terrain name</span>
+          <input id="terrain-name" value="Terrain" spellcheck="false">
+        </label>
+      </div>
+      <p class="hint">Save the PNG into that folder, then open the <code>.tres</code> in Godot: it's a TileSet with the terrain already painted onto every tile.</p>
+      <div id="cards" class="cards"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="step-try">
+      <div class="panel-head">
+        <span class="step" aria-hidden="true">3</span>
+        <h2 id="step-try">Try it</h2>
+      </div>
+      <div class="map-controls">
+        <label class="field inline">
+          <span>Paint with</span>
+          <select id="paint-layout"></select>
+        </label>
+        <label class="field check"><input type="checkbox" id="show-grid" checked><span>Grid</span></label>
+        <div class="button-row">
+          <button type="button" id="reset-map" class="secondary">Reset</button>
+          <button type="button" id="clear-map" class="secondary">Clear</button>
+        </div>
+      </div>
+      <p class="hint">Click or drag to paint and erase cells. The map is drawn the way a game would draw it: each tile is looked up in the sheet you picked.</p>
+      <div class="map-wrap" id="map-wrap"><canvas id="map"></canvas></div>
+    </section>
+
+    <section class="panel how" aria-labelledby="how">
+      <h2 id="how">How it works</h2>
+      <div class="how-grid">
+        <div>
+          <h3>Blob tiles sit on a cell</h3>
+          <p>Godot's Match Corners and Sides and Match Sides terrains put one tile on each terrain cell. Its four quarters are that cell's own, so nothing can be drawn past the cell's edge.</p>
+        </div>
+        <div>
+          <h3>Dual-grid tiles sit between cells</h3>
+          <p>A dual-grid tile is centred where four cells meet, so each of its quarters comes from a different cell. That's why 16 tiles cover every case, and why art can spill over an edge.</p>
+        </div>
+        <div>
+          <h3>So any layout converts to any other</h3>
+          <p>Both kinds are built from the same quarters. The converter cuts your image into quarters, names each by its neighbours, and glues them back together in every layout.</p>
+        </div>
+      </div>
+      <p class="hint">Everything runs in your browser. Your images never leave your computer.</p>
+    </section>
+  </main>
+</body>
+</html>

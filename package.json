@@ -1,0 +1,15 @@
+{
+  "name": "tileset-converter",
+  "version": "1.0.0",
+  "description": "Convert a terrain tileset between Godot's dual-grid, blob and match-sides layouts.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "convert": "node cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
